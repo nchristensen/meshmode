@@ -1,4 +1,7 @@
-__copyright__ = "Copyright (C) 2013 Andreas Kloeckner"
+__copyright__ = """
+Copyright (C) 2013-2021 Andreas Kloeckner
+Copyright (C) 2021 University of Illinois Board of Trustees
+"""
 
 __license__ = """
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -20,20 +23,32 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+from typing import Tuple
+from warnings import warn
 
 import numpy as np
-#import numpy.linalg as la
-from pytools import memoize_method
+from pytools import memoize_method, memoize_on_first_arg
 from meshmode.mesh import (
         SimplexElementGroup as _MeshSimplexElementGroup,
         TensorProductElementGroup as _MeshTensorProductElementGroup)
+from meshmode.discretization import (
+        NoninterpolatoryElementGroupError,
+        NodalElementGroupBase, ModalElementGroupBase,
+        InterpolatoryElementGroupBase)
 
 import modepy as mp
 
 __doc__ = """
-
 Group types
 ^^^^^^^^^^^
+
+.. autofunction:: mass_matrix
+.. autofunction:: diff_matrices
+
+Simplicial group types
+----------------------
+
+.. autoclass:: ModalSimplexElementGroup
 
 .. autoclass:: InterpolatoryQuadratureSimplexElementGroup
 .. autoclass:: QuadratureSimplexElementGroup
@@ -41,6 +56,11 @@ Group types
 .. autoclass:: PolynomialRecursiveNodesElementGroup
 .. autoclass:: PolynomialEquidistantSimplexElementGroup
 .. autoclass:: PolynomialGivenNodesElementGroup
+
+Tensor product group types
+--------------------------
+
+.. autoclass:: ModalTensorProductElementGroup
 
 .. autoclass:: GaussLegendreTensorProductElementGroup
 .. autoclass:: LegendreGaussLobattoTensorProductElementGroup
@@ -52,6 +72,11 @@ Group factories
 .. autoclass:: ElementGroupFactory
 .. autoclass:: OrderAndTypeBasedGroupFactory
 
+Simplicial group factories
+--------------------------
+
+.. autoclass:: ModalSimplexGroupFactory
+
 .. autoclass:: InterpolatoryQuadratureSimplexGroupFactory
 .. autoclass:: QuadratureSimplexGroupFactory
 .. autoclass:: PolynomialWarpAndBlendGroupFactory
@@ -59,89 +84,144 @@ Group factories
 .. autoclass:: PolynomialEquidistantSimplexGroupFactory
 .. autoclass:: PolynomialGivenNodesGroupFactory
 
+Tensor product group factories
+------------------------------
+
+.. autoclass:: ModalTensorProductGroupFactory
+
 .. autoclass:: GaussLegendreTensorProductGroupFactory
 .. autoclass:: LegendreGaussLobattoTensorProductGroupFactory
 """
 
-from meshmode.discretization import ElementGroupBase, InterpolatoryElementGroupBase
+
+# {{{ matrices
+
+@memoize_on_first_arg
+def mass_matrix(grp: InterpolatoryElementGroupBase) -> np.ndarray:
+    if not isinstance(grp, InterpolatoryElementGroupBase):
+        raise NoninterpolatoryElementGroupError(
+                f"cannot construct mass matrix on '{type(grp).__name__}'")
+
+    assert grp.is_orthonormal_basis()
+    return mp.mass_matrix(
+            grp.basis_obj().functions,
+            grp.unit_nodes)
 
 
-# {{{ base class for poynomial elements
+@memoize_on_first_arg
+def diff_matrices(grp: InterpolatoryElementGroupBase) -> Tuple[np.ndarray]:
+    if not isinstance(grp, InterpolatoryElementGroupBase):
+        raise NoninterpolatoryElementGroupError(
+                f"cannot construct diff matrices on '{type(grp).__name__}'")
 
-class PolynomialElementGroupBase(InterpolatoryElementGroupBase):
-    @memoize_method
-    def mass_matrix(self):
-        assert self.is_orthogonal_basis()
+    basis_fcts = grp.basis_obj().functions
+    grad_basis_fcts = grp.basis_obj().gradients
 
-        import modepy as mp
-        return mp.mass_matrix(
-                self.basis(),
-                self.unit_nodes)
+    if len(basis_fcts) != grp.unit_nodes.shape[1]:
+        raise NoninterpolatoryElementGroupError(
+                f"{type(grp).__name__} does not support interpolation because "
+                "it is not unisolvent (its unit node count does not match its "
+                "number of basis functions). Differentiation requires "
+                "the ability to interpolate.")
 
-    @memoize_method
-    def diff_matrices(self):
-        if len(self.basis()) != self.unit_nodes.shape[1]:
-            from meshmode.discretization import NoninterpolatoryElementGroupError
-            raise NoninterpolatoryElementGroupError(
-                    "%s does not support interpolation because it is not "
-                    "unisolvent (its unit node count does not match its "
-                    "number of basis functions). Differentiation requires "
-                    "the ability to interpolate." % type(self).__name__)
+    result = mp.differentiation_matrices(
+            basis_fcts,
+            grad_basis_fcts,
+            grp.unit_nodes)
 
-        result = mp.differentiation_matrices(
-                self.basis(),
-                self.grad_basis(),
-                self.unit_nodes)
+    return result if isinstance(result, tuple) else (result,)
 
-        if not isinstance(result, tuple):
-            return (result,)
-        else:
-            return result
+
+@memoize_on_first_arg
+def from_mesh_interp_matrix(grp: NodalElementGroupBase) -> np.ndarray:
+    meg = grp.mesh_el_group
+    meg_space = type(grp.space)(meg.dim, meg.order)
+
+    return mp.resampling_matrix(
+            mp.basis_for_space(meg_space, grp.shape).functions,
+            grp.unit_nodes,
+            meg.unit_nodes)
+
+
+@memoize_on_first_arg
+def to_mesh_interp_matrix(grp: NodalElementGroupBase) -> np.ndarray:
+    return mp.resampling_matrix(
+            grp.basis_obj().functions,
+            grp.mesh_el_group.unit_nodes,
+            grp.unit_nodes)
 
 # }}}
 
 
-# {{{ concrete element groups for simplices
+# {{{ base class for interpolatory polynomial elements
 
-class SimplexElementGroupBase(ElementGroupBase):
+class PolynomialElementGroupBase(InterpolatoryElementGroupBase):
+    def mass_matrix(self):
+        warn(
+                "This method is deprecated and will go away in 2022.x. "
+                "Use 'meshmode.discretization.poly_element.mass_matrix' instead.",
+                DeprecationWarning, stacklevel=2)
+
+        return mass_matrix(self)
+
+    def diff_matrices(self):
+        warn(
+                "This method is deprecated and will go away in 2022.x. "
+                "Use 'meshmode.discretization.poly_element.diff_matrices' instead.",
+                DeprecationWarning, stacklevel=2)
+
+        return diff_matrices(self)
+# }}}
+
+
+# {{{ base class for polynomial modal element groups
+
+class PolynomialModalElementGroupBase(ModalElementGroupBase):
+    @memoize_method
+    def basis_obj(self):
+        return mp.orthonormal_basis_for_space(self.space, self.shape)
+
+# }}}
+
+
+# {{{ concrete element groups for modal simplices
+
+class ModalSimplexElementGroup(PolynomialModalElementGroupBase):
     @property
     @memoize_method
-    def _shape(self):
+    def shape(self):
         return mp.Simplex(self.dim)
 
     @property
     @memoize_method
-    def _space(self):
+    def space(self):
         return mp.PN(self.dim, self.order)
 
+# }}}
+
+
+# {{{ concrete element groups for nodal and interpolatory simplices
+
+class SimplexElementGroupBase(NodalElementGroupBase):
+    @property
     @memoize_method
+    def shape(self):
+        return mp.Simplex(self.dim)
+
+    @property
+    @memoize_method
+    def space(self):
+        return mp.PN(self.dim, self.order)
+
     def from_mesh_interp_matrix(self):
-        meg = self.mesh_el_group
-        meg_space = mp.PN(meg.dim, meg.order)
-        return mp.resampling_matrix(
-                mp.basis_for_space(meg_space, self._shape).functions,
-                self.unit_nodes,
-                meg.unit_nodes)
+        return from_mesh_interp_matrix(self)
 
 
 class PolynomialSimplexElementGroupBase(PolynomialElementGroupBase,
         SimplexElementGroupBase):
-    def is_orthogonal_basis(self):
-        return self.dim <= 3
-
-    @property
     @memoize_method
-    def _basis(self):
-        return mp.basis_for_space(self._space, self._shape)
-
-    def basis(self):
-        return self._basis.functions
-
-    def mode_ids(self):
-        return self._basis.mode_ids
-
-    def grad_basis(self):
-        return self._basis.gradients
+    def basis_obj(self):
+        return mp.basis_for_space(self.space, self.shape)
 
 
 class InterpolatoryQuadratureSimplexElementGroup(PolynomialSimplexElementGroupBase):
@@ -150,10 +230,6 @@ class InterpolatoryQuadratureSimplexElementGroup(PolynomialSimplexElementGroupBa
     hence usable for differentiation and interpolation.
 
     No interpolation nodes are present on the boundary of the simplex.
-
-    The :meth:`~meshmode.discretization.InterpolatoryElementGroupBase.mode_ids`
-    are a tuple (one entry per dimension) of directional polynomial degrees
-    on the reference element.
     """
 
     @memoize_method
@@ -173,7 +249,7 @@ class InterpolatoryQuadratureSimplexElementGroup(PolynomialSimplexElementGroupBa
         if len(result.shape) == 1:
             result = np.array([result])
 
-        dim2, nunit_nodes = result.shape
+        dim2, _ = result.shape
         assert dim2 == self.mesh_el_group.dim
         return result
 
@@ -190,10 +266,6 @@ class QuadratureSimplexElementGroup(SimplexElementGroupBase):
     quadarature, but is not necessarily usable for interpolation.
 
     No interpolation nodes are present on the boundary of the simplex.
-
-    The :meth:`~meshmode.discretization.InterpolatoryElementGroupBase.mode_ids`
-    are a tuple (one entry per dimension) of directional polynomial degrees
-    on the reference element.
     """
 
     @memoize_method
@@ -202,7 +274,7 @@ class QuadratureSimplexElementGroup(SimplexElementGroupBase):
         if dims == 0:
             return mp.Quadrature(np.empty((0, 1)), np.empty((0, 1)))
         elif dims == 1:
-            return mp.LegendreGaussQuadrature(self.order)
+            return mp.LegendreGaussQuadrature(self.order, force_dim_axis=True)
         else:
             return mp.XiaoGimbutasSimplexQuadrature(self.order, dims)
 
@@ -213,7 +285,7 @@ class QuadratureSimplexElementGroup(SimplexElementGroupBase):
         if len(result.shape) == 1:
             result = np.array([result])
 
-        dim2, nunit_nodes = result.shape
+        dim2, _ = result.shape
         assert dim2 == self.mesh_el_group.dim
 
         return result
@@ -229,8 +301,8 @@ class _MassMatrixQuadratureElementGroup(PolynomialSimplexElementGroupBase):
     @memoize_method
     def weights(self):
         return np.dot(
-                self.mass_matrix(),
-                np.ones(len(self.basis())))
+                mass_matrix(self),
+                np.ones(len(self.basis_obj().functions)))
 
 
 class PolynomialWarpAndBlendElementGroup(_MassMatrixQuadratureElementGroup):
@@ -240,10 +312,6 @@ class PolynomialWarpAndBlendElementGroup(_MassMatrixQuadratureElementGroup):
     phenomena. Nodes are present on the boundary of the simplex.
 
     Uses :func:`modepy.warp_and_blend_nodes`.
-
-    The :meth:`~meshmode.discretization.InterpolatoryElementGroupBase.mode_ids`
-    are a tuple (one entry per dimension) of directional polynomial degrees
-    on the reference element.
     """
     @property
     @memoize_method
@@ -255,7 +323,7 @@ class PolynomialWarpAndBlendElementGroup(_MassMatrixQuadratureElementGroup):
         else:
             result = mp.warp_and_blend_nodes(dim, self.order)
 
-        dim2, nunit_nodes = result.shape
+        dim2, _ = result.shape
         assert dim2 == dim
         return result
 
@@ -271,10 +339,6 @@ class PolynomialRecursiveNodesElementGroup(_MassMatrixQuadratureElementGroup):
     of the *family* argument to :func:`recursivenodes.recursive_nodes`.
 
     Requires :mod:`recursivenodes` to be installed.
-
-    The :meth:`~meshmode.discretization.InterpolatoryElementGroupBase.mode_ids`
-    are a tuple (one entry per dimension) of directional polynomial degrees
-    on the reference element.
 
     .. [Isaac20] Tobin Isaac. Recursive, parameter-free, explicitly defined
         interpolation nodes for simplices.
@@ -295,9 +359,12 @@ class PolynomialRecursiveNodesElementGroup(_MassMatrixQuadratureElementGroup):
         result = recursive_nodes(dim, self.order, self.family,
                 domain="biunit").T.copy()
 
-        dim2, nunit_nodes = result.shape
+        dim2, _ = result.shape
         assert dim2 == dim
         return result
+
+    def discretization_key(self):
+        return (type(self), self.dim, self.order, self.family)
 
 
 class PolynomialEquidistantSimplexElementGroup(_MassMatrixQuadratureElementGroup):
@@ -305,10 +372,6 @@ class PolynomialEquidistantSimplexElementGroup(_MassMatrixQuadratureElementGroup
     polynomials in :math:`P^k`, hence usable for differentiation and
     interpolation. Interpolation nodes are present on the boundary of the
     simplex.
-
-    The :meth:`~meshmode.discretization.InterpolatoryElementGroupBase.mode_ids`
-    are a tuple (one entry per dimension) of directional polynomial degrees
-    on the reference element.
 
     .. versionadded:: 2016.1
     """
@@ -318,7 +381,7 @@ class PolynomialEquidistantSimplexElementGroup(_MassMatrixQuadratureElementGroup
         dim = self.mesh_el_group.dim
         result = mp.equidistant_nodes(dim, self.order)
 
-        dim2, nunit_nodes = result.shape
+        dim2, _ = result.shape
         assert dim2 == dim
         return result
 
@@ -348,30 +411,47 @@ class PolynomialGivenNodesElementGroup(_MassMatrixQuadratureElementGroup):
 
         return self._unit_nodes
 
+    def discretization_key(self):
+        # FIXME?
+        # The unit_nodes numpy array isn't hashable, and comparisons would
+        # be pretty expensive.
+        raise NotImplementedError("PolynomialGivenNodesElementGroup does not "
+                "implement discretization_key")
+
 # }}}
 
 
-# {{{ concrete element groups for tensor product elements
+# {{{ concrete element groups for modal tensor product (hypercube) elements
 
-class HypercubeElementGroupBase(ElementGroupBase):
+class ModalTensorProductElementGroup(PolynomialModalElementGroupBase):
     @property
     @memoize_method
-    def _shape(self):
+    def shape(self):
         return mp.Hypercube(self.dim)
 
     @property
     @memoize_method
-    def _space(self):
+    def space(self):
         return mp.QN(self.dim, self.order)
 
+# }}}
+
+
+# {{{ concrete element groups for nodal tensor product (hypercube) elements
+
+class HypercubeElementGroupBase(NodalElementGroupBase):
+    @property
     @memoize_method
+    def shape(self):
+        return mp.Hypercube(self.dim)
+
+    @property
+    @memoize_method
+    def space(self):
+        return mp.QN(self.dim, self.order)
+
     def from_mesh_interp_matrix(self):
-        meg = self.mesh_el_group
-        meg_space = mp.QN(meg.dim, meg.order)
-        return mp.resampling_matrix(
-                mp.basis_for_space(meg_space, self._shape).functions,
-                self.unit_nodes,
-                meg.unit_nodes)
+        return from_mesh_interp_matrix(self)
 
 
 class TensorProductElementGroupBase(PolynomialElementGroupBase,
@@ -395,25 +475,8 @@ class TensorProductElementGroupBase(PolynomialElementGroupBase,
         self._basis = basis
         self._unit_nodes = unit_nodes
 
-    def is_orthogonal_basis(self):
-        try:
-            # NOTE: meshmode kind of assumes that the basis is orthonormal
-            # with weight 1, which is why this check is stricter than expected.
-            return self._basis.orthonormality_weight() == 1
-        except mp.BasisNotOrthonormal:
-            return False
-
-    @memoize_method
-    def mode_ids(self):
-        return self._basis.mode_ids
-
-    @memoize_method
-    def basis(self):
-        return self._basis.functions
-
-    @memoize_method
-    def grad_basis(self):
-        return self._basis.gradients
+    def basis_obj(self):
+        return self._basis
 
     @property
     def unit_nodes(self):
@@ -423,8 +486,15 @@ class TensorProductElementGroupBase(PolynomialElementGroupBase,
     @memoize_method
     def weights(self):
         return np.dot(
-                self.mass_matrix(),
-                np.ones(len(self.basis())))
+                mass_matrix(self),
+                np.ones(len(self.basis_obj().functions)))
+
+    def discretization_key(self):
+        # FIXME?
+        # The unit_nodes numpy array isn't hashable, and comparisons would
+        # be pretty expensive.
+        raise NotImplementedError("TensorProductElementGroup does not "
+                "implement discretization_key")
 
 
 class LegendreTensorProductElementGroup(TensorProductElementGroupBase):
@@ -457,6 +527,9 @@ class GaussLegendreTensorProductElementGroup(LegendreTensorProductElementGroup):
     def weights(self):
         return self._quadrature_rule.weights
 
+    def discretization_key(self):
+        return (type(self), self.dim, self.order)
+
 
 class LegendreGaussLobattoTensorProductElementGroup(
         LegendreTensorProductElementGroup):
@@ -471,11 +544,12 @@ class LegendreGaussLobattoTensorProductElementGroup(
     def __init__(self, mesh_el_group, order, index):
         from modepy.quadrature.jacobi_gauss import legendre_gauss_lobatto_nodes
         unit_nodes_1d = legendre_gauss_lobatto_nodes(order)
+        unit_nodes = mp.tensor_product_nodes([unit_nodes_1d] * mesh_el_group.dim)
 
-        super().__init__(mesh_el_group, order, index,
-                unit_nodes=mp.tensor_product_nodes(
-                    [unit_nodes_1d] * mesh_el_group.dim)
-                )
+        super().__init__(mesh_el_group, order, index, unit_nodes=unit_nodes)
+
+    def discretization_key(self):
+        return (type(self), self.dim, self.order)
 
 
 class EquidistantTensorProductElementGroup(LegendreTensorProductElementGroup):
@@ -490,11 +564,12 @@ class EquidistantTensorProductElementGroup(LegendreTensorProductElementGroup):
     def __init__(self, mesh_el_group, order, index):
         from modepy.nodes import equidistant_nodes
         unit_nodes_1d = equidistant_nodes(1, order)[0]
+        unit_nodes = mp.tensor_product_nodes([unit_nodes_1d] * mesh_el_group.dim)
 
-        super().__init__(mesh_el_group, order, index,
-                unit_nodes=mp.tensor_product_nodes(
-                    [unit_nodes_1d] * mesh_el_group.dim)
-                )
+        super().__init__(mesh_el_group, order, index, unit_nodes=unit_nodes)
+
+    def discretization_key(self):
+        return (type(self), self.dim, self.order)
 
 # }}}
 
@@ -503,12 +578,14 @@ class EquidistantTensorProductElementGroup(LegendreTensorProductElementGroup):
 
 class ElementGroupFactory:
     """
-    .. function:: __call__(mesh_ele_group, node_nr_base)
+    .. function:: __call__(mesh_ele_group, dof_nr_base)
     """
-    pass
 
 
 class HomogeneousOrderBasedGroupFactory(ElementGroupFactory):
+    mesh_group_class = type
+    group_class = type
+
     def __init__(self, order):
         self.order = order
 
@@ -542,6 +619,11 @@ class OrderAndTypeBasedGroupFactory(ElementGroupFactory):
 
 # {{{ group factories for simplices
 
+class ModalSimplexGroupFactory(HomogeneousOrderBasedGroupFactory):
+    mesh_group_class = _MeshSimplexElementGroup
+    group_class = ModalSimplexElementGroup
+
+
 class InterpolatoryQuadratureSimplexGroupFactory(HomogeneousOrderBasedGroupFactory):
     mesh_group_class = _MeshSimplexElementGroup
     group_class = InterpolatoryQuadratureSimplexElementGroup
@@ -559,7 +641,7 @@ class PolynomialWarpAndBlendGroupFactory(HomogeneousOrderBasedGroupFactory):
 
 class PolynomialRecursiveNodesGroupFactory(HomogeneousOrderBasedGroupFactory):
     def __init__(self, order, family):
-        self.order = order
+        super().__init__(order)
         self.family = family
 
     def __call__(self, mesh_el_group, index):
@@ -582,7 +664,7 @@ class PolynomialEquidistantSimplexGroupFactory(HomogeneousOrderBasedGroupFactory
 
 class PolynomialGivenNodesGroupFactory(HomogeneousOrderBasedGroupFactory):
     def __init__(self, order, unit_nodes):
-        self.order = order
+        super().__init__(order)
         self.unit_nodes = unit_nodes
 
     def __call__(self, mesh_el_group, index):
@@ -597,6 +679,11 @@ class PolynomialGivenNodesGroupFactory(HomogeneousOrderBasedGroupFactory):
 
 
 # {{{ group factories for tensor products
+
+class ModalTensorProductGroupFactory(HomogeneousOrderBasedGroupFactory):
+    mesh_group_class = _MeshTensorProductElementGroup
+    group_class = ModalTensorProductElementGroup
+
 
 class GaussLegendreTensorProductGroupFactory(HomogeneousOrderBasedGroupFactory):
     mesh_group_class = _MeshTensorProductElementGroup

@@ -48,10 +48,11 @@ from loopy import GlobalArg, auto
 def parametrization_derivative(actx, discr):
     thawed_nodes = thaw(actx, discr.nodes())
 
+    from meshmode.discretization import num_reference_derivative
     result = np.zeros((discr.ambient_dim, discr.dim), dtype=object)
     for iambient in range(discr.ambient_dim):
         for idim in range(discr.dim):
-            result[iambient, idim] = discr.num_reference_derivative(
+            result[iambient, idim] = num_reference_derivative(discr,
                     (idim,), thawed_nodes[iambient])
 
     return result
@@ -72,10 +73,6 @@ class DGDiscretization:
     @property
     def _setup_actx(self):
         return self.volume_discr._setup_actx
-
-    @property
-    def array_context(self):
-        return self.volume_discr.array_context
 
     @property
     def dim(self):
@@ -197,8 +194,9 @@ class DGDiscretization:
     def grad(self, vec):
         ipder = self.inverse_parametrization_derivative()
 
+        from meshmode.discretization import num_reference_derivative
         dref = [
-                self.volume_discr.num_reference_derivative((idim,), vec)
+                num_reference_derivative(self.volume_discr, (idim,), vec)
                 for idim in range(self.volume_discr.dim)]
 
         return make_obj_array([
@@ -230,7 +228,7 @@ class DGDiscretization:
     def get_inverse_mass_matrix(self, grp, dtype):
         import modepy as mp
         matrix = mp.inverse_mass_matrix(
-                grp.basis(),
+                grp.basis_obj().functions,
                 grp.unit_nodes)
 
         actx = self._setup_actx
@@ -238,8 +236,7 @@ class DGDiscretization:
 
     def inverse_mass(self, vec):
         if isinstance(vec, np.ndarray):
-            return obj_array_vectorize(
-                    lambda el: self.inverse_mass(el), vec)
+            return obj_array_vectorize(self.inverse_mass, vec)
 
         @memoize_in(self, "elwise_linear_knl")
         def knl():
@@ -287,7 +284,8 @@ class DGDiscretization:
         for face in mp.faces_for_shape(shape):
             face_vertices = unit_vertices[np.array(face.volume_vertex_indices)].T
             matrix[:, face.face_index, :] = mp.nodal_face_mass_matrix(
-                    volgrp.basis(), volgrp.unit_nodes, afgrp.unit_nodes,
+                    volgrp.basis_obj().functions,
+                    volgrp.unit_nodes, afgrp.unit_nodes,
                     volgrp.order,
                     face_vertices)
 
@@ -296,7 +294,7 @@ class DGDiscretization:
 
     def face_mass(self, vec):
         if isinstance(vec, np.ndarray):
-            return obj_array_vectorize(lambda el: self.face_mass(el), vec)
+            return obj_array_vectorize(self.face_mass, vec)
 
         @memoize_in(self, "face_mass_knl")
         def knl():
@@ -373,9 +371,7 @@ class TracePair:
 
 def interior_trace_pair(discr, vec):
     i = discr.interp("vol", "int_faces", vec)
-    e = obj_array_vectorize(
-            lambda el: discr.opposite_face_connection()(el),
-            i)
+    e = obj_array_vectorize(discr.opposite_face_connection(), i)
     return TracePair("int_faces", i, e)
 
 # }}}

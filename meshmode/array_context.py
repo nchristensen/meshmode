@@ -20,8 +20,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-
+from typing import Union, Sequence
 from functools import partial
+import operator
 import numpy as np
 import loopy as lp
 from loopy.version import MOST_RECENT_LANGUAGE_VERSION
@@ -31,6 +32,10 @@ from pytools.tag import Tag, UniqueTag
 __doc__ = """
 .. autofunction:: make_loopy_program
 .. autoclass:: IsDOFArray
+from abc import ABC, abstractmethod
+
+
+.. autoclass:: CommonSubexpressionTag
 .. autoclass:: ArrayContext
 .. autoclass:: PyOpenCLArrayContext
 .. autofunction:: pytest_generate_tests_for_pyopencl_array_context
@@ -38,11 +43,14 @@ __doc__ = """
 """
 
 
-def make_loopy_program(domains, statements, kernel_data=["..."],
+def make_loopy_program(domains, statements, kernel_data=None,
         name="mm_actx_kernel"):
     """Return a :class:`loopy.LoopKernel` suitable for use with
     :meth:`ArrayContext.call_loopy`.
     """
+    if kernel_data is None:
+        kernel_data = ["..."]
+
     return lp.make_kernel(
             domains,
             statements,
@@ -193,10 +201,21 @@ class _BaseFakeNumpyLinalgNamespace:
         self._array_context = array_context
 
 
-class ArrayContext:
+class CommonSubexpressionTag(Tag):
+    """A tag that is applicable to arrays indicating that this same array
+    may be evaluated multiple times, and that the implementation should
+    eliminate those redundant evaluations if possible.
+
+    .. versionadded:: 2021.2
+    """
+
+
+class ArrayContext(ABC):
     """An interface that allows a
     :class:`~meshmode.discretization.Discretization` to create and interact
     with arrays of degrees of freedom without fully specifying their types.
+
+    .. versionadded:: 2020.2
 
     .. automethod:: empty
     .. automethod:: zeros
@@ -221,8 +240,8 @@ class ArrayContext:
 
     .. automethod:: freeze
     .. automethod:: thaw
-
-    .. versionadded:: 2020.2
+    .. automethod:: tag
+    .. automethod:: tag_axis
     """
 
     def __init__(self):
@@ -231,11 +250,13 @@ class ArrayContext:
     def _get_fake_numpy_namespace(self):
         return _BaseFakeNumpyNamespace(self)
 
+    @abstractmethod
     def empty(self, shape, dtype):
-        raise NotImplementedError
+        pass
 
+    @abstractmethod
     def zeros(self, shape, dtype):
-        raise NotImplementedError
+        pass
 
     def empty_like(self, ary):
         return self.empty(shape=ary.shape, dtype=ary.dtype)
@@ -243,21 +264,23 @@ class ArrayContext:
     def zeros_like(self, ary):
         return self.zeros(shape=ary.shape, dtype=ary.dtype)
 
+    @abstractmethod
     def from_numpy(self, array: np.ndarray):
         r"""
         :returns: the :class:`numpy.ndarray` *array* converted to the
             array context's array type. The returned array will be
             :meth:`thaw`\ ed.
         """
-        raise NotImplementedError
+        pass
 
+    @abstractmethod
     def to_numpy(self, array):
         r"""
         :returns: *array*, an array recognized by the context, converted
             to a :class:`numpy.ndarray`. *array* must be
             :meth:`thaw`\ ed.
         """
-        raise NotImplementedError
+        pass
 
     def call_loopy(self, program, **kwargs):
         """Execute the :mod:`loopy` program *program* on the arguments
@@ -270,7 +293,6 @@ class ArrayContext:
         :return: a :class:`dict` of outputs from the program, each an
             array understood by the context.
         """
-        raise NotImplementedError
 
     @memoize_method
     def _get_scalar_func_loopy_program(self, c_name, nargs, naxes):
@@ -303,6 +325,7 @@ class ArrayContext:
 
         return prog
 
+    @abstractmethod
     def freeze(self, array):
         """Return a version of the context-defined array *array* that is
         'frozen', i.e. suitable for long-term storage and reuse. Frozen arrays
@@ -315,8 +338,8 @@ class ArrayContext:
         it is permitted to :meth:`thaw` it in a different one, as long as that
         context understands the array format.
         """
-        raise NotImplementedError
 
+    @abstractmethod
     def thaw(self, array):
         """Take a 'frozen' array and return a new array representing the data in
         *array* that is able to perform arithmetic and other operations, using
@@ -328,7 +351,24 @@ class ArrayContext:
 
         The returned array may not be used with other contexts while thawed.
         """
-        raise NotImplementedError
+
+    @abstractmethod
+    def tag(self, tags: Union[Sequence[Tag], Tag], array):
+        """If the array type used by the array context is capable of capturing
+        metadata, return a version of *array* with the *tags* applied. *array*
+        itself is not modified.
+
+        .. versionadded:: 2021.2
+        """
+
+    @abstractmethod
+    def tag_axis(self, iaxis, tags: Union[Sequence[Tag], Tag], array):
+        """If the array type used by the array context is capable of capturing
+        metadata, return a version of *array* in which axis number *iaxis* has
+        the *tags* applied. *array* itself is not modified.
+
+        .. versionadded:: 2021.2
+        """
 
 # }}}
 
@@ -338,6 +378,17 @@ class ArrayContext:
 class _PyOpenCLFakeNumpyNamespace(_BaseFakeNumpyNamespace):
     def _get_fake_numpy_linalg_namespace(self):
         return _PyOpenCLFakeNumpyLinalgNamespace(self._array_context)
+
+    def _bop(self, op, x, y):
+        from meshmode.dof_array import obj_or_dof_array_vectorize_n_args
+        return obj_or_dof_array_vectorize_n_args(op, x, y)
+
+    def equal(self, x, y): return self._bop(operator.eq, x, y)  # noqa: E704
+    def not_equal(self, x, y): return self._bop(operator.ne, x, y)  # noqa: E704
+    def greater(self, x, y): return self._bop(operator.gt, x, y)  # noqa: E704
+    def greater_equal(self, x, y): return self._bop(operator.ge, x, y)  # noqa: E704
+    def less(self, x, y): return self._bop(operator.lt, x, y)  # noqa: E704
+    def less_equal(self, x, y): return self._bop(operator.le, x, y)  # noqa: E704
 
     def maximum(self, x, y):
         import pyopencl.array as cl_array
@@ -358,6 +409,8 @@ class _PyOpenCLFakeNumpyNamespace(_BaseFakeNumpyNamespace):
         from meshmode.dof_array import obj_or_dof_array_vectorize_n_args
 
         def where_inner(inner_crit, inner_then, inner_else):
+            if isinstance(inner_crit, bool):
+                return inner_then if inner_crit else inner_else
             return cl_array.if_positive(inner_crit != 0, inner_then, inner_else,
                     queue=self._array_context.queue)
 
@@ -375,6 +428,14 @@ class _PyOpenCLFakeNumpyNamespace(_BaseFakeNumpyNamespace):
     def max(self, a):
         import pyopencl.array as cl_array
         return cl_array.max(a, queue=self._array_context.queue).get()[()]
+
+    def stack(self, arrays, axis=0):
+        import pyopencl.array as cla
+        from meshmode.dof_array import obj_or_dof_array_vectorize_n_args
+        return obj_or_dof_array_vectorize_n_args(
+            lambda *args: cla.stack(arrays=args, axis=axis,
+                                    queue=self._array_context.queue),
+            *arrays)
 
 
 def _flatten_grp_array(grp_ary):
@@ -501,22 +562,29 @@ class PyOpenCLArrayContext(ArrayContext):
         return cla.zeros(self.queue, shape=shape, dtype=dtype,
                 allocator=self.allocator)
 
-    def from_numpy(self, np_array: np.ndarray):
+    def from_numpy(self, array: np.ndarray):
         import pyopencl.array as cla
         print("Active blocks: {}".format(self.allocator.active_blocks))
-        return cla.to_device(self.queue, np_array, allocator=self.allocator)
+        return cla.to_device(self.queue, array, allocator=self.allocator)
 
     def to_numpy(self, array):
         return array.get(queue=self.queue)
 
     def call_loopy(self, program, **kwargs):
         program = self.transform_loopy_program(program)
+        try:
+            prg_name = program.name
+        except AttributeError:
+            try:
+                prg_name = program.root_kernel.name
+            except AttributeError:
+                prg_name, = program.entrypoints
 
         evt, result = program(self.queue, **kwargs, allocator=self.allocator)
 
         if self._wait_event_queue_length is not False:
             wait_event_queue = self._kernel_name_to_wait_event_queue.setdefault(
-                    program.name, [])
+                    prg_name, [])
 
             wait_event_queue.append(evt)
             if len(wait_event_queue) > self._wait_event_queue_length:
@@ -539,7 +607,11 @@ class PyOpenCLArrayContext(ArrayContext):
         try:
             options = program.options
         except AttributeError:
-            options = program.root_kernel.options
+            try:
+                options = program.root_kernel.options
+            except AttributeError:
+                entrypoint, = program.entrypoints
+                options = program[entrypoint].options
         if not (options.return_dict and options.no_numpy):
             raise ValueError("Loopy program passed to call_loopy must "
                     "have return_dict and no_numpy options set. "
@@ -547,12 +619,15 @@ class PyOpenCLArrayContext(ArrayContext):
                     "to create this program?")
 
         # FIXME: This could be much smarter.
-        import loopy as lp
         # accommodate loopy with and without kernel callables
         try:
             all_inames = program.all_inames()
         except AttributeError:
-            all_inames = program.root_kernel.all_inames()
+            try:
+                all_inames = program.root_kernel.all_inames()
+            except AttributeError:
+                entrypoint, = program.entrypoints
+                all_inames = program[entrypoint].all_inames()
 
         inner_iname = None
 
@@ -584,6 +659,14 @@ class PyOpenCLArrayContext(ArrayContext):
         if inner_iname is not None:
             program = lp.split_iname(program, inner_iname, 16, inner_tag="l.0")
         return lp.tag_inames(program, {outer_iname: "g.0"})
+
+    def tag(self, tags: Union[Sequence[Tag], Tag], array):
+        # Sorry, not capable.
+        return array
+
+    def tag_axis(self, iaxis, tags: Union[Sequence[Tag], Tag], array):
+        # Sorry, not capable.
+        return array
 
 # }}}
 
