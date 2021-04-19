@@ -491,16 +491,19 @@ class PyOpenCLArrayContext(ArrayContext):
 
     def empty(self, shape, dtype):
         import pyopencl.array as cla
+        print("Active blocks: {}".format(self.allocator.active_blocks))
         return cla.empty(self.queue, shape=shape, dtype=dtype,
                 allocator=self.allocator)
 
     def zeros(self, shape, dtype):
         import pyopencl.array as cla
+        print("Active blocks: {}".format(self.allocator.active_blocks))
         return cla.zeros(self.queue, shape=shape, dtype=dtype,
                 allocator=self.allocator)
 
     def from_numpy(self, np_array: np.ndarray):
         import pyopencl.array as cla
+        print("Active blocks: {}".format(self.allocator.active_blocks))
         return cla.to_device(self.queue, np_array, allocator=self.allocator)
 
     def to_numpy(self, array):
@@ -555,9 +558,10 @@ class PyOpenCLArrayContext(ArrayContext):
 
         has_dof_array = False
         for arg in program.args:
+            if isinstance(arg.tags, ParameterValue):
+                program = lp.fix_parameters(program, **{arg.name: arg.tags.value})
             if isinstance(getattr(arg, "tags", None), IsDOFArray):
                 has_dof_array = True
-                break
 
         if len(all_inames) == 1:
             outer_iname = all_inames[0]

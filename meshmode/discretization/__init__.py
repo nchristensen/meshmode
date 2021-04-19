@@ -238,6 +238,9 @@ class Discretization:
             dtype = self.complex_dtype
         else:
             dtype = np.dtype(dtype)
+    
+        for grp in self.groups:
+            print("Creating DOF Array of size {} GB".format(grp.nelements*grp.nunit_dofs*8/1e9))
 
         return _DOFArray(actx, tuple(
             creation_func(shape=(grp.nelements, grp.nunit_dofs), dtype=dtype)
