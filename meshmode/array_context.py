@@ -457,19 +457,20 @@ def _alias_global_temporaries(t_unit):
     for sched_idx, _ in enumerate(kernel.linearization):
         just_dead_temps = sched_idx_to_just_dead_temp_vars[sched_idx]
         to_be_allocated_temps = sched_idx_to_just_live_temp_vars[sched_idx]
-        for tv_name in just_dead_temps:
+        for tv_name in sorted(just_dead_temps):
             tv = new_tvs[tv_name]
             assert tv.base_storage is not None
             assert tv.base_storage not in shape_to_available_base_storage[tv.nbytes]
             shape_to_available_base_storage[tv.nbytes].add(tv.base_storage)
 
-        for tv_name in to_be_allocated_temps:
+        for tv_name in sorted(to_be_allocated_temps):
             assert len(to_be_allocated_temps) <= 1
             tv = kernel.temporary_variables[tv_name]
             assert tv.name not in new_tvs
             assert tv.base_storage is None
             if shape_to_available_base_storage[tv.nbytes]:
-                base_storage = shape_to_available_base_storage[tv.nbytes].pop()
+                base_storage = sorted(shape_to_available_base_storage[tv.nbytes])[0]
+                shape_to_available_base_storage[tv.nbytes].remove(base_storage)
             else:
                 base_storage = vng("_msh_actx_tmp_base")
 
