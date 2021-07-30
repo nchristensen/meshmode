@@ -501,5 +501,23 @@ class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
 
         return t_unit
 
+    def transform_dag(self, dag):
+        import pytato as pt
+
+        # {{{ materialize
+
+        nusers = pt.analysis.get_nusers(dag)
+
+        def materialize(ary: pt.Array) -> pt.Array:
+            if ((not isinstance(ary, (pt.InputArgumentBase, pt.NamedArray)))
+                    and nusers[ary] > 1):
+                return ary.tagged(pt.tags.ImplementAs(pt.tags.ImplStored()))
+
+            return ary
+
+        # }}}
+
+        return pt.transform.map_and_copy(dag, materialize)
+
 
 # vim: foldmethod=marker
