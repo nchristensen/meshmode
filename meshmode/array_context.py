@@ -333,11 +333,15 @@ def _single_grid_work_group_transform(kernel, cl_device):
     from meshmode.transform_metadata import (ConcurrentElementInameTag,
                                              ConcurrentDOFInameTag)
 
+    splayed_inames = set()
     ngroups = cl_device.max_compute_units * 4  # '4' to overfill the device
     l_one_size = 16
     l_zero_size = 2
 
     for insn in kernel.instructions:
+        if insn.within_inames in splayed_inames:
+            continue
+
         if isinstance(insn, lp.CallInstruction):
             # must be a callable kernel, don't touch.
             pass
@@ -358,6 +362,8 @@ def _single_grid_work_group_transform(kernel, cl_device):
                 kernel = lp.split_iname(kernel, f"{iname}_inner_outer",
                                         l_one_size, inner_tag="l.1",
                                         outer_tag="g.0")
+
+                splayed_inames.add(insn.within_inames)
                 continue
 
             for iname in insn.within_inames:
@@ -391,6 +397,7 @@ def _single_grid_work_group_transform(kernel, cl_device):
                                     l_one_size, inner_tag="l.1", outer_tag="g.0")
             kernel = lp.split_iname(kernel, smaller_loop,
                                     l_zero_size, inner_tag="l.0")
+            splayed_inames.add(insn.within_inames)
         elif isinstance(insn, lp.BarrierInstruction):
             pass
         else:
@@ -487,6 +494,34 @@ def _alias_global_temporaries(t_unit):
     return t_unit.with_kernel(kernel)
 
 
+def _make_global_temporaries_private(t_unit):
+    import loopy as lp
+    from loopy.transform.precompute import precompute_for_single_kernel
+    knl = t_unit.default_entrypoint
+
+    for tv in knl.temporary_variables.values():
+        if tv.shape == ():
+            continue
+        wmap = knl.writer_map()
+        rmap = knl.reader_map()
+        def_insn, = wmap[tv.name]
+        read_insns = rmap[tv.name]
+
+        if (isinstance(knl.id_to_insn[def_insn], lp.Assignment)
+                and all((isinstance(knl.id_to_insn[read_insn], lp.Assignment)
+                         and not knl.id_to_insn[read_insn].reduction_inames())
+                        for read_insn in read_insns)):
+            if len({knl.insn_inames(read_insn) for read_insn in read_insns}) == 1:
+                print(f"Privatizing {tv.name}")
+                knl = lp.assignment_to_subst(knl, tv.name)
+                knl = precompute_for_single_kernel(
+                    knl, t_unit.callables_table, f"{tv.name}_subst",
+                    sweep_inames=(),
+                    temporary_address_space=lp.AddressSpace.PRIVATE)
+
+    return t_unit.with_kernel(knl)
+
+
 class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
     """
     A :class:`PytatoPyOpenCLArrayContext` that parallelizes work in an OpenCL
@@ -494,6 +529,8 @@ class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
     """
     def transform_loopy_program(self, t_unit):
         import loopy as lp
+
+        t_unit = _make_global_temporaries_private(t_unit)
         t_unit = _single_grid_work_group_transform(t_unit, self.queue.device)
         t_unit = lp.set_options(t_unit, "insert_gbarriers")
         t_unit = lp.linearize(lp.preprocess_kernel(t_unit))
@@ -503,6 +540,7 @@ class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
 
     def transform_dag(self, dag):
         import pytato as pt
+        from pytato.array import Einsum
 
         # {{{ materialize
 
@@ -511,6 +549,9 @@ class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
         def materialize(ary: pt.Array) -> pt.Array:
             if ((not isinstance(ary, (pt.InputArgumentBase, pt.NamedArray)))
                     and nusers[ary] > 1):
+                return ary.tagged(pt.tags.ImplementAs(pt.tags.ImplStored()))
+
+            if isinstance(ary, Einsum):
                 return ary.tagged(pt.tags.ImplementAs(pt.tags.ImplStored()))
 
             return ary
