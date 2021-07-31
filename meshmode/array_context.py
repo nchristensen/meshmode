@@ -499,7 +499,8 @@ def _make_global_temporaries_private(t_unit):
     from loopy.transform.precompute import precompute_for_single_kernel
     knl = t_unit.default_entrypoint
 
-    for tv in knl.temporary_variables.values():
+    for _, tv in sorted(knl.temporary_variables.items(),
+                        reverse=True):
         if tv.shape == ():
             continue
         wmap = knl.writer_map()
@@ -512,7 +513,6 @@ def _make_global_temporaries_private(t_unit):
                          and not knl.id_to_insn[read_insn].reduction_inames())
                         for read_insn in read_insns)):
             if len({knl.insn_inames(read_insn) for read_insn in read_insns}) == 1:
-                print(f"Privatizing {tv.name}")
                 knl = lp.assignment_to_subst(knl, tv.name)
                 knl = precompute_for_single_kernel(
                     knl, t_unit.callables_table, f"{tv.name}_subst",
