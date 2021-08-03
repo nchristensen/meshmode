@@ -335,8 +335,8 @@ def _single_grid_work_group_transform(kernel, cl_device):
 
     splayed_inames = set()
     ngroups = cl_device.max_compute_units * 4  # '4' to overfill the device
-    l_one_size = 16
-    l_zero_size = 2
+    l_one_size = 4
+    l_zero_size = 16
 
     for insn in kernel.instructions:
         if insn.within_inames in splayed_inames:
