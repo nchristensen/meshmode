@@ -27,13 +27,18 @@ THE SOFTWARE.
 
 import sys
 from warnings import warn
+from functools import partial, reduce
+from arraycontext import rec_map_reduce_array_container
 from arraycontext import PyOpenCLArrayContext as PyOpenCLArrayContextBase
 from arraycontext import PytatoPyOpenCLArrayContext as PytatoPyOpenCLArrayContextBase
+from arraycontext.impl.pytato.fake_numpy import PytatoFakeNumpyNamespace
 from arraycontext.pytest import (
         _PytestPyOpenCLArrayContextFactoryWithClass,
         _PytestPytatoPyOpenCLArrayContextFactory,
         register_pytest_array_context_factory)
 from loopy.translation_unit import for_each_kernel
+import pytato as pt
+import pyopencl.array as cl_array
 
 
 def thaw(actx, ary):
@@ -522,6 +527,60 @@ def _make_global_temporaries_private(t_unit):
     return t_unit.with_kernel(knl)
 
 
+def _can_be_eagerly_computed(ary) -> bool:
+    from pytato.transform import InputGatherer
+    from pytato.array import Placeholder
+    return all(not isinstance(inp, Placeholder)
+               for inp in InputGatherer()(ary))
+
+
+class EagerReduceComputingPytatoFakeNumpyNamespace(PytatoFakeNumpyNamespace):
+    """
+    A Numpy-namespace that computes the reductions eagerly whenever possible.
+    """
+    def sum(self, a, dtype=None):
+        if rec_map_reduce_array_container(lambda x, y: x and y,
+                                          _can_be_eagerly_computed, a):
+
+            def _pt_sum(ary):
+                return cl_array.sum(self._array_context.freeze(ary),
+                                    dtype=dtype,
+                                    queue=self._array_context.queue)
+
+            return self._array_context.thaw(rec_map_reduce_array_container(sum,
+                                                                           _pt_sum,
+                                                                           a))
+        else:
+            return super().sum(a, dtype)
+
+    def min(self, a):
+        if rec_map_reduce_array_container(lambda x, y: x and y,
+                                          _can_be_eagerly_computed, a):
+            queue = self._array_context.queue
+            frozen_result = rec_map_reduce_array_container(
+                partial(reduce, partial(cl_array.minimum, queue=queue)),
+                lambda ary: cl_array.min(self._array_context.freeze(ary),
+                                         queue=queue),
+                a)
+            return self._array_context.thaw(frozen_result)
+        else:
+            return super().min(a)
+
+    def max(self, a):
+        if rec_map_reduce_array_container(lambda x, y: x and y,
+                                          _can_be_eagerly_computed, a):
+
+            queue = self._array_context.queue
+            frozen_result = rec_map_reduce_array_container(
+                partial(reduce, partial(cl_array.maximum, queue=queue)),
+                lambda ary: cl_array.max(self._array_context.freeze(ary),
+                                         queue=queue),
+                a)
+            return self._array_context.thaw(frozen_result)
+        else:
+            return super().max(a)
+
+
 class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
     """
     A :class:`PytatoPyOpenCLArrayContext` that parallelizes work in an OpenCL
@@ -538,8 +597,10 @@ class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
 
         return t_unit
 
+    def _get_fake_numpy_namespace(self):
+        return EagerReduceComputingPytatoFakeNumpyNamespace(self)
+
     def transform_dag(self, dag):
-        import pytato as pt
         from pytato.array import Einsum
 
         # {{{ materialize
