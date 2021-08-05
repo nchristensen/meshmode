@@ -617,9 +617,32 @@ class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
 
             return ary
 
+        dag = pt.transform.map_and_copy(dag, materialize)
+
         # }}}
 
-        return pt.transform.map_and_copy(dag, materialize)
+        # {{{ collapse data wrappers
 
+        data_wrapper_cache = {}
+
+        def cached_data_wrapper_if_present(ary):
+            if isinstance(ary, pt.DataWrapper):
+                cache_key = (ary.data.data.int_ptr, ary.data.offset,
+                             ary.shape, ary.data.strides)
+                try:
+                    result = data_wrapper_cache[cache_key]
+                except KeyError:
+                    result = ary
+                    data_wrapper_cache[cache_key] = result
+
+                return result
+            else:
+                return ary
+
+        dag = pt.transform.map_and_copy(dag, cached_data_wrapper_if_present)
+
+        # }}}
+
+        return dag
 
 # vim: foldmethod=marker
