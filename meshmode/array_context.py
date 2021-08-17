@@ -420,7 +420,7 @@ def _alias_global_temporaries(t_unit):
     from loopy.kernel import KernelState
     from loopy.schedule import (RunInstruction, EnterLoop, LeaveLoop,
                                 CallKernel, ReturnFromKernel, Barrier)
-    from loopy.schedule.tools import get_nearest_return_from_kernel
+    from loopy.schedule.tools import get_return_from_kernel_mapping
     from pytools import UniqueNameGenerator
     from collections import defaultdict
 
@@ -431,7 +431,7 @@ def _alias_global_temporaries(t_unit):
                           if tv.address_space == AddressSpace.GLOBAL)
     temp_to_live_interval_start = {}
     temp_to_live_interval_end = {}
-    return_from_kernel_idxs = get_nearest_return_from_kernel(kernel)
+    return_from_kernel_idxs = get_return_from_kernel_mapping(kernel)
 
     for sched_idx, sched_item in enumerate(kernel.linearization):
         if isinstance(sched_item, RunInstruction):
@@ -519,10 +519,13 @@ def _make_global_temporaries_private(t_unit):
                         for read_insn in read_insns)):
             if len({knl.insn_inames(read_insn) for read_insn in read_insns}) == 1:
                 knl = lp.assignment_to_subst(knl, tv.name)
-                knl = precompute_for_single_kernel(
-                    knl, t_unit.callables_table, f"{tv.name}_subst",
-                    sweep_inames=(),
-                    temporary_address_space=lp.AddressSpace.PRIVATE)
+                try:
+                    knl = precompute_for_single_kernel(
+                        knl, t_unit.callables_table, f"{tv.name}_subst",
+                        sweep_inames=(),
+                        temporary_address_space=lp.AddressSpace.PRIVATE)
+                except RuntimeError:
+                    pass
 
     return t_unit.with_kernel(knl)
 
@@ -589,7 +592,14 @@ class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
     def transform_loopy_program(self, t_unit):
         import loopy as lp
 
-        t_unit = _make_global_temporaries_private(t_unit)
+        # if len(t_unit.default_entrypoint.instructions) > 50:
+        #     import pudb; pu.db
+        #     1/0
+        #     with open("nozzle.knl", "w") as f:
+        #         f.write(str(t_unit))
+        #         1/0
+
+        # t_unit = _make_global_temporaries_private(t_unit)
         t_unit = _single_grid_work_group_transform(t_unit, self.queue.device)
         t_unit = lp.set_options(t_unit, "insert_gbarriers")
         t_unit = lp.linearize(lp.preprocess_kernel(t_unit))
