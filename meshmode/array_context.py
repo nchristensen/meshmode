@@ -613,6 +613,27 @@ class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
     def transform_dag(self, dag):
         from pytato.array import Einsum
 
+        # {{{ face_mass: materialize einsum args
+
+        def materialize_face_mass_vec(expr):
+            if isinstance(expr, pt.Einsum):
+                my_tag, = expr.tags_of_type(pt.tags.EinsumInfo)
+                if my_tag.spec == "ifj,fej,fej->ei":
+                    mat, jac, vec = expr.args
+                    return pt.einsum("ifj,fej,fej->ei",
+                                     mat,
+                                     jac,
+                                     vec.tagged(pt.tags
+                                                .ImplementAs(pt.tags.ImplStored())))
+                else:
+                    return expr
+            else:
+                return expr
+
+        dag = pt.transform.map_and_copy(dag, materialize_face_mass_vec)
+
+        # }}}
+
         # {{{ materialize
 
         nusers = pt.analysis.get_nusers(dag)
