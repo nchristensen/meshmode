@@ -658,7 +658,7 @@ class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
 
         def cached_data_wrapper_if_present(ary):
             if isinstance(ary, pt.DataWrapper):
-                cache_key = (ary.data.data.int_ptr, ary.data.offset,
+                cache_key = (ary.data.base_data.int_ptr, ary.data.offset,
                              ary.shape, ary.data.strides)
                 try:
                     result = data_wrapper_cache[cache_key]
