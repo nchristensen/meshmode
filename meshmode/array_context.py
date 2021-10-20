@@ -623,8 +623,7 @@ class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
                     return pt.einsum("ifj,fej,fej->ei",
                                      mat,
                                      jac,
-                                     vec.tagged(pt.tags
-                                                .ImplementAs(pt.tags.ImplStored())))
+                                     vec.tagged(pt.tags.ImplStored()))
                 else:
                     return expr
             else:
@@ -634,23 +633,19 @@ class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
 
         # }}}
 
-        # {{{ materialize
+        # {{{ materialize all einsums
 
-        nusers = pt.analysis.get_nusers(dag)
-
-        def materialize(ary: pt.Array) -> pt.Array:
-            if ((not isinstance(ary, (pt.InputArgumentBase, pt.NamedArray)))
-                    and nusers[ary] > 1):
-                return ary.tagged(pt.tags.ImplementAs(pt.tags.ImplStored()))
-
+        def materialize_einsums(ary: pt.Array) -> pt.Array:
             if isinstance(ary, Einsum):
-                return ary.tagged(pt.tags.ImplementAs(pt.tags.ImplStored()))
+                return ary.tagged(pt.tags.ImplStored())
 
             return ary
 
-        dag = pt.transform.map_and_copy(dag, materialize)
+        dag = pt.transform.map_and_copy(dag, materialize_einsums)
 
         # }}}
+
+        dag = pt.transform.materialize_with_mpms(dag)
 
         # {{{ collapse data wrappers
 
