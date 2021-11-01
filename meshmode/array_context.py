@@ -541,9 +541,10 @@ class EagerReduceComputingPytatoFakeNumpyNamespace(PytatoFakeNumpyNamespace):
     """
     A Numpy-namespace that computes the reductions eagerly whenever possible.
     """
-    def sum(self, a, dtype=None):
-        if rec_map_reduce_array_container(lambda x, y: x and y,
-                                          _can_be_eagerly_computed, a):
+    def sum(self, a, axis=None, dtype=None):
+        if (rec_map_reduce_array_container(lambda x, y: x and y,
+                                           _can_be_eagerly_computed, a)
+                and axis is None):
 
             def _pt_sum(ary):
                 return cl_array.sum(self._array_context.freeze(ary),
@@ -554,11 +555,12 @@ class EagerReduceComputingPytatoFakeNumpyNamespace(PytatoFakeNumpyNamespace):
                                                                            _pt_sum,
                                                                            a))
         else:
-            return super().sum(a, dtype)
+            return super().sum(a, axis=axis, dtype=dtype)
 
-    def min(self, a):
-        if rec_map_reduce_array_container(lambda x, y: x and y,
-                                          _can_be_eagerly_computed, a):
+    def min(self, a, axis=None):
+        if (rec_map_reduce_array_container(lambda x, y: x and y,
+                                           _can_be_eagerly_computed, a)
+                and axis is None):
             queue = self._array_context.queue
             frozen_result = rec_map_reduce_array_container(
                 partial(reduce, partial(cl_array.minimum, queue=queue)),
@@ -567,11 +569,12 @@ class EagerReduceComputingPytatoFakeNumpyNamespace(PytatoFakeNumpyNamespace):
                 a)
             return self._array_context.thaw(frozen_result)
         else:
-            return super().min(a)
+            return super().min(a, axis=axis)
 
-    def max(self, a):
-        if rec_map_reduce_array_container(lambda x, y: x and y,
-                                          _can_be_eagerly_computed, a):
+    def max(self, a, axis=None):
+        if (rec_map_reduce_array_container(lambda x, y: x and y,
+                                           _can_be_eagerly_computed, a)
+                and axis is None):
 
             queue = self._array_context.queue
             frozen_result = rec_map_reduce_array_container(
@@ -581,7 +584,7 @@ class EagerReduceComputingPytatoFakeNumpyNamespace(PytatoFakeNumpyNamespace):
                 a)
             return self._array_context.thaw(frozen_result)
         else:
-            return super().max(a)
+            return super().max(a, axis=axis)
 
 
 class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
