@@ -619,16 +619,14 @@ class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
         # {{{ face_mass: materialize einsum args
 
         def materialize_face_mass_vec(expr):
-            if isinstance(expr, pt.Einsum):
-                my_tag, = expr.tags_of_type(pt.tags.EinsumInfo)
-                if my_tag.spec == "ifj,fej,fej->ei":
-                    mat, jac, vec = expr.args
-                    return pt.einsum("ifj,fej,fej->ei",
-                                     mat,
-                                     jac,
-                                     vec.tagged(pt.tags.ImplStored()))
-                else:
-                    return expr
+            if (isinstance(expr, pt.Einsum)
+                    and pt.analysis.is_einsum_similar_to_subscript(
+                        expr, "ifj,fej,fej->ei")):
+                mat, jac, vec = expr.args
+                return pt.einsum("ifj,fej,fej->ei",
+                                 mat,
+                                 jac,
+                                 vec.tagged(pt.tags.ImplStored()))
             else:
                 return expr
 
