@@ -26,6 +26,8 @@ THE SOFTWARE.
 """
 
 import sys
+import logging
+
 from warnings import warn
 from functools import partial, reduce
 from arraycontext import rec_map_reduce_array_container
@@ -39,6 +41,8 @@ from arraycontext.pytest import (
 from loopy.translation_unit import for_each_kernel
 import pytato as pt
 import pyopencl.array as cl_array
+
+logger = logging.getLogger(__name__)
 
 
 def thaw(actx, ary):
@@ -587,6 +591,40 @@ class EagerReduceComputingPytatoFakeNumpyNamespace(PytatoFakeNumpyNamespace):
             return super().max(a, axis=axis)
 
 
+def deduplicate_data_wrappers(dag):
+    data_wrapper_cache = {}
+    data_wrappers_encountered = 0
+
+    def cached_data_wrapper_if_present(ary):
+        nonlocal data_wrappers_encountered
+
+        if isinstance(ary, pt.DataWrapper):
+
+            data_wrappers_encountered += 1
+            cache_key = (ary.data.base_data.int_ptr, ary.data.offset,
+                         ary.shape, ary.data.strides)
+            try:
+                result = data_wrapper_cache[cache_key]
+            except KeyError:
+                result = ary
+                data_wrapper_cache[cache_key] = result
+
+            return result
+        else:
+            return ary
+
+    dag = pt.transform.map_and_copy(dag, cached_data_wrapper_if_present)
+
+    if data_wrappers_encountered:
+        logger.info("data wrapper de-duplication: "
+                "%d encountered, %d kept, %d eliminated",
+                data_wrappers_encountered,
+                len(data_wrapper_cache),
+                data_wrappers_encountered - len(data_wrapper_cache))
+
+    return dag
+
+
 class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
     """
     A :class:`PytatoPyOpenCLArrayContext` that parallelizes work in an OpenCL
@@ -647,28 +685,7 @@ class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
         # }}}
 
         dag = pt.transform.materialize_with_mpms(dag)
-
-        # {{{ collapse data wrappers
-
-        data_wrapper_cache = {}
-
-        def cached_data_wrapper_if_present(ary):
-            if isinstance(ary, pt.DataWrapper):
-                cache_key = (ary.data.base_data.int_ptr, ary.data.offset,
-                             ary.shape, ary.data.strides)
-                try:
-                    result = data_wrapper_cache[cache_key]
-                except KeyError:
-                    result = ary
-                    data_wrapper_cache[cache_key] = result
-
-                return result
-            else:
-                return ary
-
-        dag = pt.transform.map_and_copy(dag, cached_data_wrapper_if_present)
-
-        # }}}
+        dag = deduplicate_data_wrappers(dag)
 
         return dag
 
