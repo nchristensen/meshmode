@@ -503,9 +503,9 @@ def main(lazy=False):
             assert len(fields.u) == 1
             logger.info("[%05d] t %.5e / %.5e norm %.5e",
                     istep, t, t_final, actx.to_numpy(flat_norm(fields.u, 2)))
-            vis.write_vtk_file("fld-wave-min-%04d.vtu" % istep, [
-                ("q", fields),
-                ])
+            #vis.write_vtk_file("fld-wave-min-%04d.vtu" % istep, [
+            #    ("q", fields),
+            #    ])
 
         t += dt
         istep += 1

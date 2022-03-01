@@ -641,10 +641,17 @@ class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
         #         1/0
 
         # t_unit = _make_global_temporaries_private(t_unit)
+        #1/0
         t_unit = _single_grid_work_group_transform(t_unit, self.queue.device)
         t_unit = lp.set_options(t_unit, "insert_gbarriers")
         t_unit = lp.linearize(lp.preprocess_kernel(t_unit))
         t_unit = _alias_global_temporaries(t_unit)
+
+        #print("HERE")
+        #print(t_unit.default_entrypoint.name, len(t_unit.entrypoints))
+        #for arg in t_unit.default_entrypoint.args:
+        #    print(arg.name, [tag for tag in arg.tags])
+        #print(t_unit)
 
         return t_unit
 
@@ -652,6 +659,7 @@ class SingleGridWorkBalancingPytatoArrayContext(PytatoPyOpenCLArrayContextBase):
         return EagerReduceComputingPytatoFakeNumpyNamespace(self)
 
     def transform_dag(self, dag):
+        1/0
         from pytato.array import Einsum
 
         # {{{ face_mass: materialize einsum args
