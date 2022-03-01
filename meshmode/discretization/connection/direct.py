@@ -26,7 +26,8 @@ import numpy.linalg as la
 
 import loopy as lp
 from meshmode.transform_metadata import (
-        ConcurrentElementInameTag, ConcurrentDOFInameTag)
+        ConcurrentElementInameTag, ConcurrentDOFInameTag,
+        IsOpArray, IsDOFArray, ParameterValue)
 from pytools import memoize_in, keyed_memoize_method
 from arraycontext import (
         ArrayContext, NotAnArrayContainerError,
@@ -504,7 +505,8 @@ class DirectDiscretizationConnection(DiscretizationConnection):
 
         @memoize_in(actx, (DirectDiscretizationConnection,
             "resample_by_mat_knl_inplace"))
-        def mat_knl():
+        def mat_knl(nelements_vec, nelements_result, n_to_nodes, n_from_nodes,
+                result_dtype, rmat_dtype, ary_dtype):
             t_unit = make_loopy_program(
                 """{[iel, idof, j]:
                     0<=iel<nelements and
@@ -514,14 +516,23 @@ class DirectDiscretizationConnection(DiscretizationConnection):
                     = sum(j, resample_mat[idof, j] \
                     * ary[from_element_indices[iel], j])",
                 [
-                    lp.GlobalArg("result", None,
+                    lp.GlobalArg("result", result_dtype,
                         shape="nelements_result, n_to_nodes",
-                        offset=lp.auto),
-                    lp.GlobalArg("ary", None,
+                        offset=lp.auto, tags=[IsDOFArray()]),
+                    lp.GlobalArg("resample_mat", rmat_dtype,
+                        shape="n_to_nodes, n_from_nodes",
+                        offset=lp.auto, tags=[IsOpArray()]),
+                    lp.GlobalArg("ary", ary_dtype,
                         shape="nelements_vec, n_from_nodes",
-                        offset=lp.auto),
-                    lp.ValueArg("nelements_result", np.int32),
-                    lp.ValueArg("nelements_vec", np.int32),
+                        offset=lp.auto, tags=[IsDOFArray()]),
+                    lp.ValueArg("n_to_nodes", np.int32,
+                        tags=[ParameterValue(n_to_nodes)]),
+                    lp.ValueArg("n_from_nodes", np.int32,
+                        tags=[ParameterValue(n_from_nodes)]),
+                    lp.ValueArg("nelements_result", np.int32,
+                        tags=[ParameterValue(nelements_result)]),
+                    lp.ValueArg("nelements_vec", np.int32,
+                        tags=[ParameterValue(nelements_vec)]),
                     "...",
                     ],
                 name="resample_by_mat_inplace")
@@ -532,7 +543,9 @@ class DirectDiscretizationConnection(DiscretizationConnection):
 
         @memoize_in(actx,
                 (DirectDiscretizationConnection, "resample_by_picking_knl_inplace"))
-        def pick_knl():
+        def pick_knl(nelements, nelements_result, n_to_nodes, nelements_vec,
+                n_from_nodes, result_dtype, ary_dtype, from_dtype,
+                to_dtype, pick_list_dtype):
             t_unit = make_loopy_program(
                 """{[iel, idof]:
                     0<=iel<nelements and
@@ -540,15 +553,28 @@ class DirectDiscretizationConnection(DiscretizationConnection):
                 "result[to_element_indices[iel], idof] \
                     = ary[from_element_indices[iel], pick_list[idof]]",
                 [
-                    lp.GlobalArg("result", None,
+                    lp.GlobalArg("result", result_dtype,
                         shape="nelements_result, n_to_nodes",
-                        offset=lp.auto),
-                    lp.GlobalArg("ary", None,
+                        offset=lp.auto, tags=[IsDOFArray()]),
+                    lp.GlobalArg("ary", ary_dtype,
                         shape="nelements_vec, n_from_nodes",
-                        offset=lp.auto),
-                    lp.ValueArg("nelements_result", np.int32),
-                    lp.ValueArg("nelements_vec", np.int32),
-                    lp.ValueArg("n_from_nodes", np.int32),
+                        offset=lp.auto, tags=[IsDOFArray()]),
+                    lp.GlobalArg("to_element_indices", to_dtype,
+                        shape="nelements,", offset=lp.auto),
+                    lp.GlobalArg("from_element_indices", from_dtype,
+                        shape="nelements,", offset=lp.auto),
+                    lp.GlobalArg("pick_list", pick_list_dtype,
+                        shape="n_to_nodes,", offset=lp.auto),
+                    lp.ValueArg("nelements_result", np.int32,
+                        tags=[ParameterValue(nelements_result)]),
+                    lp.ValueArg("nelements_vec", np.int32,
+                        tags=[ParameterValue(nelements_vec)]),
+                    lp.ValueArg("n_from_nodes", np.int32,
+                        tags=[ParameterValue(n_from_nodes)]),
+                    lp.ValueArg("n_to_nodes", np.int32,
+                        tags=[ParameterValue(n_to_nodes)]),
+                    lp.ValueArg("nelements", np.int32,
+                        tags=[ParameterValue(nelements)]),
                     "...",
                     ],
                 name="resample_by_picking_inplace")
@@ -571,22 +597,43 @@ class DirectDiscretizationConnection(DiscretizationConnection):
                         actx, i_tgrp, i_batch)
 
                 if point_pick_indices is None:
-                    actx.call_loopy(mat_knl(),
-                            resample_mat=self._resample_matrix(
-                                actx, i_tgrp, i_batch),
+                    resample_mat = self._resample_matrix(actx, i_tgrp, i_batch)
+                    n_to_nodes, n_from_nodes = resample_mat.shape
+                    nelements_result, _ = result[i_tgrp].shape
+                    nelements_vec, _ = ary[batch.from_group_index].shape
+                    result_dtype = result[i_tgrp].dtype
+                    rmat_dtype = resample_mat.dtype
+                    ary_dtype = ary[batch.from_group_index].dtype
+
+                    actx.call_loopy(mat_knl(nelements_vec, nelements_result,
+                                n_to_nodes, n_from_nodes,
+                                result_dtype, rmat_dtype, ary_dtype),
+                            resample_mat=resample_mat,
                             result=result[i_tgrp],
                             ary=ary[batch.from_group_index],
                             from_element_indices=batch.from_element_indices,
                             to_element_indices=batch.to_element_indices)
 
                 else:
-                    actx.call_loopy(pick_knl(),
+                    nelements_result, n_to_nodes = result[i_tgrp].shape
+                    nelements_vec, n_from_nodes = ary[batch.from_group_index].shape
+                    nelements = batch.from_element_indices.shape[0]
+                    result_dtype = result[i_tgrp].dtype
+                    ary_dtype = ary[batch.from_group_index].dtype
+                    from_dtype = batch.from_element_indices.dtype
+                    to_dtype = batch.to_element_indices.dtype
+                    pick_list_dtype = point_pick_indices.dtype
+
+                    pknl = pick_knl(nelements, nelements_result, n_to_nodes,
+                            nelements_vec, n_from_nodes, result_dtype,
+                            ary_dtype, from_dtype, to_dtype, pick_list_dtype)
+
+                    actx.call_loopy(pknl,
                             pick_list=point_pick_indices,
                             result=result[i_tgrp],
                             ary=ary[batch.from_group_index],
                             from_element_indices=batch.from_element_indices,
                             to_element_indices=batch.to_element_indices)
-
         return result
 
     # }}}
@@ -609,7 +656,7 @@ def make_direct_full_resample_matrix(actx, conn):
     .. note::
 
         This function assumes a flattened DOF array, as produced by
-        :class:`~meshmode.dof_array.flatten`.
+        :class:`~arraycontext.flatten`.
 
     :arg actx: an :class:`~arraycontext.ArrayContext`.
     :arg conn: a :class:`DirectDiscretizationConnection`.
@@ -621,7 +668,7 @@ def make_direct_full_resample_matrix(actx, conn):
 
     @memoize_in(actx, (make_direct_full_resample_matrix, "oversample_mat_knl"))
     def knl():
-        return make_loopy_program(
+        t_unit = make_loopy_program(
             [
                 "{[idof_init]: 0 <= idof_init < nnodes_tgt}",
                 "{[jdof_init]: 0 <= jdof_init < nnodes_src}",
@@ -639,13 +686,21 @@ def make_direct_full_resample_matrix(actx, conn):
             [
                 lp.GlobalArg("result", None,
                     shape="nnodes_tgt, nnodes_src",
-                    offset=lp.auto),
+                    offset=lp.auto, tags=[IsDOFArray()]),
                 lp.ValueArg("itgt_base, isrc_base", np.int32),
                 lp.ValueArg("nnodes_tgt, nnodes_src", np.int32),
-                "...",
+                ...,
             ],
             name="oversample_mat"
         )
+
+        return lp.tag_inames(t_unit, {
+                "iel": ConcurrentElementInameTag(),
+                "idof": ConcurrentDOFInameTag(),
+                # FIXME: jdof is also concurrent, but the tranform in
+                # `meshmode.array_context` does not handle two of them right now
+                # "jdof": ConcurrentDOFInameTag(),
+                })
 
     to_discr_ndofs = sum(grp.nelements*grp.nunit_dofs
             for grp in conn.to_discr.groups)

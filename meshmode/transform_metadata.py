@@ -2,6 +2,10 @@
 .. autoclass:: FirstAxisIsElementsTag
 .. autoclass:: ConcurrentElementInameTag
 .. autoclass:: ConcurrentDOFInameTag
+.. autoclass:: ParameterValue
+.. autoclass:: IsDOFArray
+.. autoclass:: IsOpArray
+.. autoclass:: EinsumArgsTags
 """
 
 __copyright__ = """
@@ -28,7 +32,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-from pytools.tag import Tag
+from pytools.tag import Tag, UniqueTag, tag_dataclass
+from immutables import Map
+from typing import Any
 
 
 class FirstAxisIsElementsTag(Tag):
@@ -57,3 +63,38 @@ class ConcurrentDOFInameTag(Tag):
     computations for all DOFs within each element may be performed
     concurrently.
     """
+
+
+@tag_dataclass
+class ParameterValue(UniqueTag):
+    """A tag that applies to :class:`loopy.ValueArg`. Instances of this tag
+    are initialized with the value of the parameter and this value may be
+    later retrieved to fix the value of the parameter. This allows moving
+    calls to `loopy.fix_parameter` to `transform_loopy_program` so that all
+    kernel transformations may occur there.
+    """
+    value: Any
+
+
+class IsDOFArray(Tag):
+    """A tag that is applicable to :class:`loopy.ArrayArg` indicating the content of the
+    array comprises element DOFs.
+    """
+    pass
+
+
+class IsOpArray(Tag):
+    """A tag that is applicable to arrays indicating the array is an
+    operator (as opposed, for instance, to a DOF array)."""
+    pass
+
+
+@tag_dataclass
+class EinsumArgsTags(Tag):
+    """A tag containing an `immutables.Map` of tuples of tags indexed by
+    argument name.
+    """
+    tags_map: Map
+
+    def __init__(self, tags_map):
+        object.__setattr__(self, "tags_map", Map(tags_map))

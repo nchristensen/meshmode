@@ -314,7 +314,7 @@ def make_curve_mesh(
     nodes = curve_f(t).reshape(vertices.shape[0], nelements, -1)
 
     from meshmode.mesh import Mesh, SimplexElementGroup
-    egroup = SimplexElementGroup(
+    egroup = SimplexElementGroup.make_group(
             order,
             vertex_indices=vertex_indices,
             nodes=nodes,
@@ -417,7 +417,7 @@ def make_group_from_vertices(
     # make contiguous
     nodes = nodes.copy()
 
-    return group_cls(
+    return group_cls.make_group(
             order, vertex_indices, nodes,
             unit_nodes=unit_nodes)
 
@@ -554,10 +554,12 @@ def generate_sphere(r: float, order: int, *,
         mesh = refine_uniformly(mesh, uniform_refinement_rounds)
 
     # ensure vertices and nodes are still on the sphere of radius r
+    from dataclasses import replace
     vertices = mesh.vertices * r / np.sqrt(np.sum(mesh.vertices**2, axis=0))
     grp, = mesh.groups
-    grp = grp.copy(
-            nodes=grp.nodes * r / np.sqrt(np.sum(grp.nodes**2, axis=0)))
+    grp = replace(grp,
+            nodes=grp.nodes * r / np.sqrt(np.sum(grp.nodes**2, axis=0)),
+            element_nr_base=None, node_nr_base=None)
 
     from meshmode.mesh import Mesh
     return Mesh(
@@ -628,9 +630,11 @@ def generate_surface_of_revolution(
         res[:2, :] *= r_expected/np.sum(res[:2, :]**2, axis=0)
         return res
 
+    from dataclasses import replace
     vertices = ensure_radius(mesh.vertices)
     grp, = mesh.groups
-    grp = grp.copy(nodes=ensure_radius(grp.nodes))
+    grp = replace(grp, nodes=ensure_radius(grp.nodes),
+                  element_nr_base=None, node_nr_base=None)
 
     from meshmode.mesh import Mesh
     return Mesh(
@@ -650,25 +654,17 @@ def generate_torus_and_cycle_vertices(
         unit_nodes: Optional[np.ndarray] = None,
         group_cls: Optional[type] = None,
         ):
+    a = r_major
+    b = r_minor
+
+    # {{{ create periodic grid
+
     from meshmode.mesh import SimplexElementGroup, TensorProductElementGroup
     if group_cls is None:
         group_cls = SimplexElementGroup
 
-    a = r_major
-    b = r_minor
-    u, v = np.mgrid[0:2*np.pi:2*np.pi/n_major, 0:2*np.pi:2*np.pi/n_minor]
-
-    # https://web.archive.org/web/20160410151837/https://www.math.hmc.edu/~gu/curves_and_surfaces/surfaces/torus.html  # noqa
-    x = np.cos(u) * (a + b*np.cos(v))
-    y = np.sin(u) * (a + b*np.cos(v))
-    z = b * np.sin(v)
-
-    vertices = (
-            np.vstack((x[np.newaxis], y[np.newaxis], z[np.newaxis]))
-            .transpose(0, 2, 1).copy().reshape(3, -1))
-
     def idx(i, j):
-        return (i % n_major) + (j % n_minor) * n_major
+        return i + j * (n_major + 1)
 
     if issubclass(group_cls, SimplexElementGroup):
         # NOTE: this makes two triangles from a the square like
@@ -697,44 +693,59 @@ def generate_torus_and_cycle_vertices(
     else:
         raise TypeError(f"unsupported 'group_cls': {group_cls}")
 
+    # NOTE: include endpoints first so that `make_group_from_vertices` can
+    # actually interpolate the unit nodes to each element
+    u = np.linspace(0.0, 2.0 * np.pi, n_major + 1)
+    v = np.linspace(0.0, 2.0 * np.pi, n_minor + 1)
+    uv = np.stack(np.meshgrid(u, v, copy=False)).reshape(2, -1)
+
     vertex_indices = np.array(vertex_indices, dtype=np.int32)
     grp = make_group_from_vertices(
-            vertices, vertex_indices, order,
+            uv, vertex_indices, order,
             unit_nodes=unit_nodes,
             group_cls=group_cls)
 
-    # ambient_dim, nelements, nunit_nodes
-    nodes = grp.nodes.copy()
+    # }}}
 
-    major_theta = np.arctan2(nodes[1], nodes[0])
-    rvec = np.array([
-        np.cos(major_theta),
-        np.sin(major_theta),
-        np.zeros_like(major_theta)])
+    # {{{ evaluate on torus
 
-    #               ^
-    #               |
-    # --------------+----.
-    #           /   |     \
-    #          /    |  _-- \
-    #         |     |.^  | | y
-    #         |     +------+--->
-    #         |       x    |
-    #          \          /
-    #           \        /
-    # ------------------'
+    # https://web.archive.org/web/20160410151837/https://www.math.hmc.edu/~gu/curves_and_surfaces/surfaces/torus.html  # noqa
 
-    x = np.sum(nodes*rvec, axis=0) - a
+    # create new vertices without the endpoints
+    u = np.linspace(0.0, 2.0 * np.pi, n_major, endpoint=False)
+    v = np.linspace(0.0, 2.0 * np.pi, n_minor, endpoint=False)
+    u, v = np.meshgrid(u, v, copy=False)
 
-    minor_theta = np.arctan2(nodes[2], x)
-    nodes[0] = np.cos(major_theta) * (a + b*np.cos(minor_theta))
-    nodes[1] = np.sin(major_theta) * (a + b*np.cos(minor_theta))
-    nodes[2] = b * np.sin(minor_theta)
+    # wrap the indices around
+    i = vertex_indices % (n_major + 1)
+    j = vertex_indices // (n_major + 1)
+    vertex_indices = (i % n_major) + (j % n_minor) * n_major
+
+    # evaluate vertices on torus
+    vertices = np.stack([
+        np.cos(u) * (a + b*np.cos(v)),
+        np.sin(u) * (a + b*np.cos(v)),
+        b * np.sin(v)
+        ]).reshape(3, -1)
+
+    # evaluate nodes on torus
+    u, v = grp.nodes
+    nodes = np.stack([
+        np.cos(u) * (a + b*np.cos(v)),
+        np.sin(u) * (a + b*np.cos(v)),
+        b * np.sin(v)
+        ])
+
+    # }}}
+
+    from dataclasses import replace
+    grp = replace(grp, vertex_indices=vertex_indices, nodes=nodes,
+                  element_nr_base=None, node_nr_base=None)
 
     from meshmode.mesh import Mesh
     return (
             Mesh(
-                vertices, [grp.copy(nodes=nodes)],
+                vertices, [grp],
                 node_vertex_consistency_tolerance=node_vertex_consistency_tolerance,
                 is_conforming=True),
             [idx(i, 0) for i in range(n_major)],
@@ -849,7 +860,11 @@ def refine_mesh_and_get_urchin_warper(
         return pts * new_rad / r
 
     def warp_mesh(mesh, node_vertex_consistency_tolerance):
-        groups = [grp.copy(nodes=map_coords(grp.nodes)) for grp in mesh.groups]
+        from dataclasses import replace
+        groups = [
+            replace(grp, nodes=map_coords(grp.nodes),
+                    element_nr_base=None, node_nr_base=None)
+            for grp in mesh.groups]
 
         from meshmode.mesh import Mesh
         return Mesh(
@@ -1226,6 +1241,7 @@ def generate_regular_rect_mesh(a=(0, 0), b=(1, 1), *, nelements_per_axis=None,
                                npoints_per_axis=None,
                                periodic=None,
                                order=1,
+                               coord_dtype=np.float32,
                                boundary_tag_to_face=None,
                                group_cls=None,
                                mesh_type=None,
@@ -1443,7 +1459,8 @@ def warp_and_refine_until_resolved(
                 raise FloatingPointError("Warped mesh contains non-finite nodes "
                                          "(NaN or Inf)")
 
-        for egrp in warped_mesh.groups:
+        for base_element_nr, egrp in zip(
+                warped_mesh.base_element_nrs, warped_mesh.groups):
             dim, _ = egrp.unit_nodes.shape
 
             interp_err_est_mat = simplex_interp_error_coefficient_estimator_matrix(
@@ -1463,10 +1480,8 @@ def warp_and_refine_until_resolved(
             # max over dimensions
             est_rel_interp_error = np.max(interp_error_norm_2/mapping_norm_2, axis=0)
 
-            refine_flags[
-                    egrp.element_nr_base:
-                    egrp.element_nr_base+egrp.nelements] = \
-                            est_rel_interp_error > est_rel_interp_tolerance
+            refine_flags[base_element_nr:base_element_nr + egrp.nelements] = (
+                est_rel_interp_error > est_rel_interp_tolerance)
 
         nrefined_elements = np.sum(refine_flags.astype(np.int32))
         if nrefined_elements == 0:

@@ -28,6 +28,7 @@ __doc__ = """
 .. autofunction:: write_vertex_vtk_file
 .. autofunction:: mesh_to_tikz
 .. autofunction:: vtk_visualize_mesh
+.. autofunction:: write_stl_file
 """
 
 
@@ -188,7 +189,7 @@ def write_vertex_vtk_file(mesh, file_name,
 
     cell_types = np.empty(mesh.nelements, dtype=np.uint8)
     cell_types.fill(255)
-    for egrp in mesh.groups:
+    for base_element_nr, egrp in zip(mesh.base_element_nrs, mesh.groups):
         if isinstance(egrp, SimplexElementGroup):
             vtk_cell_type = {
                     1: VTK_LINE,
@@ -205,10 +206,7 @@ def write_vertex_vtk_file(mesh, file_name,
             raise NotImplementedError("mesh vtk file writing for "
                     "element group of type '%s'" % type(egrp).__name__)
 
-        cell_types[
-                egrp.element_nr_base:
-                egrp.element_nr_base + egrp.nelements] = \
-                        vtk_cell_type
+        cell_types[base_element_nr:base_element_nr + egrp.nelements] = vtk_cell_type
 
     assert (cell_types != 255).all()
 
@@ -274,9 +272,9 @@ def mesh_to_tikz(mesh):
     drawel_lines = []
     drawel_lines.append(r"\def\drawelements#1{")
 
-    for grp in mesh.groups:
+    for base_element_nr, grp in zip(mesh.base_element_nrs, mesh.groups):
         for iel, el in enumerate(grp.vertex_indices):
-            el_nr = grp.element_nr_base+iel+1
+            el_nr = base_element_nr + iel + 1
             elverts = mesh.vertices[:, el]
 
             centroid = np.average(elverts, axis=1)
@@ -324,6 +322,49 @@ def vtk_visualize_mesh(actx, mesh, filename,
     vis.write_vtk_file(filename, [],
             use_high_order=vtk_high_order,
             overwrite=overwrite)
+
+# }}}
+
+
+# {{{ write_stl_file
+
+def write_stl_file(mesh, stl_name, overwrite=False):
+    """Writes a `STL <https://en.wikipedia.org/wiki/STL_(file_format)>`__ file
+    from a triangular mesh in 3D. Requires the
+    `numpy-stl <https://pypi.org/project/numpy-stl/>`__ package.
+    """
+
+    import stl.mesh
+
+    if len(mesh.groups) != 1:
+        raise NotImplementedError("meshes with more than one group are "
+                "not yet supported")
+    if mesh.ambient_dim != 3:
+        raise ValueError("STL export requires a mesh in 3D ambient space")
+
+    grp, = mesh.groups
+
+    from meshmode.mesh import SimplexElementGroup
+    if not isinstance(grp, SimplexElementGroup) or grp.dim != 2:
+        raise ValueError("STL export requires the mesh to consist of "
+                "triangular elements")
+
+    faces = mesh.vertices[:, grp.vertex_indices]
+
+    stl_mesh = stl.mesh.Mesh(
+            np.zeros(mesh.nelements, dtype=stl.mesh.Mesh.dtype))
+    for iface in range(mesh.nelements):
+        for ivertex in range(3):
+            stl_mesh.vectors[iface][ivertex] = faces[:, iface, ivertex]
+
+    import os
+    if os.path.exists(stl_name):
+        if overwrite:
+            os.remove(stl_name)
+        else:
+            raise FileExistsError(f"output file '{stl_name}' already exists")
+
+    stl_mesh.save(stl_name)
 
 # }}}
 
