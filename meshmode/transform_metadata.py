@@ -6,6 +6,12 @@
 .. autoclass:: IsDOFArray
 .. autoclass:: IsOpArray
 .. autoclass:: EinsumArgsTags
+.. autoclass:: DiscretizationEntityAxisTag
+.. autoclass:: DiscretizationElementAxisTag
+.. autoclass:: DiscretizationFaceAxisTag
+.. autoclass:: DiscretizationDOFAxisTag
+.. autoclass:: DiscretizationPhysicalDimAxisTag
+.. autoclass:: DiscretizationRefDimAxisTag
 """
 
 __copyright__ = """
@@ -36,7 +42,6 @@ from pytools.tag import Tag, UniqueTag, tag_dataclass
 from immutables import Map
 from typing import Any
 
-
 class FirstAxisIsElementsTag(Tag):
     """A tag that is applicable to array outputs indicating that the first
     index corresponds to element indices. This suggests that the implementation
@@ -63,7 +68,6 @@ class ConcurrentDOFInameTag(Tag):
     computations for all DOFs within each element may be performed
     concurrently.
     """
-
 
 @tag_dataclass
 class ParameterValue(UniqueTag):
@@ -98,3 +102,61 @@ class EinsumArgsTags(Tag):
 
     def __init__(self, tags_map):
         object.__setattr__(self, "tags_map", Map(tags_map))
+
+
+class DiscretizationEntityAxisTag(UniqueTag):
+    """
+    A tag applicable to an array's axis to describe which discretization entity
+    the axis indexes over.
+    """
+
+
+@tag_dataclass
+class DiscretizationElementAxisTag(DiscretizationEntityAxisTag):
+    """
+    Array dimensions tagged with this tag type describe an axis indexing over
+    the discretization's elements.
+    """
+
+
+@tag_dataclass
+class DiscretizationFaceAxisTag(DiscretizationEntityAxisTag):
+    """
+    Array dimensions tagged with this tag type describe an axis indexing over
+    the discretization's facets.
+    """
+
+
+@tag_dataclass
+class DiscretizationDOFAxisTag(DiscretizationEntityAxisTag):
+    """
+    Array dimensions tagged with this tag type describe an axis indexing over
+    the discretization's DoFs.
+    """
+
+
+@tag_dataclass
+class DiscretizationMeshNodesAxisTag(DiscretizationEntityAxisTag):
+    """
+    Array dimensions tagged with this tag type describe an axis indexing over
+    the discretization's DoFs.
+    """
+
+
+@tag_dataclass
+class DiscretizationDimAxisTag(DiscretizationEntityAxisTag):
+    pass
+
+
+class DiscretizationPhysicalDimAxisTag(DiscretizationDimAxisTag):
+    """
+    Array dimensions tagged with this tag type describe an axis indexing over
+    the discretization's reference coordinate dimensions.
+    """
+
+
+class DiscretizationRefDimAxisTag(DiscretizationDimAxisTag):
+    """
+    Array dimensions tagged with this tag type describe an axis indexing over
+    the discretization's physical coordinate dimensions.
+    """
