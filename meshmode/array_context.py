@@ -541,7 +541,10 @@ def _alias_global_temporaries(t_unit):
         if tv.address_space != AddressSpace.GLOBAL:
             new_tvs[name] = tv
         else:
-            assert name in new_tvs
+            # FIXME: Need tighter assertion condition (this doesn't work when
+            # zero-size arrays are present)
+            # assert name in new_tvs
+            pass
 
     kernel = kernel.copy(temporary_variables=new_tvs)
 
@@ -671,7 +674,7 @@ def get_temps_not_to_contract(knl):
 
     temps_not_to_contract = set()
     for tv in knl.temporary_variables:
-        if len(wmap[tv]) == 1:
+        if len(wmap.get(tv, set())) == 1:
             writer_id, = wmap[tv]
             writer_loop_nest = knl.id_to_insn[writer_id].within_inames
             insns_in_writer_loop_nest = reduce(frozenset.union,
@@ -759,6 +762,11 @@ def _fuse_loops_over_a_discr_entity(knl,
                          for insn in orig_knl.instructions),
                         frozenset())
 
+    non_redn_loops = reduce(frozenset.union,
+                            (insn.within_inames
+                             for insn in orig_knl.instructions),
+                            frozenset())
+
     # tag_k: tag of type 'mesh_entity'
     tag_k = kanren.var()
     tags = kanren.run(0,
@@ -777,7 +785,7 @@ def _fuse_loops_over_a_discr_entity(knl,
         if should_fuse_redn_loops:
             inames = inames & redn_loops
         else:
-            inames = inames - redn_loops
+            inames = inames & non_redn_loops
 
         length_to_inames = {}
         for iname in inames:
@@ -1299,7 +1307,7 @@ class FusionContractorArrayContext(
                 return pt.Einsum(expr.access_descriptors,
                                  (arg1, arg2, arg3),
                                  expr.axes,
-                                 expr.redn_descr_to_redn_dim,
+                                 expr.redn_axis_to_redn_descr,
                                  expr.index_to_access_descr,
                                  expr.tags)
             else:
@@ -1369,7 +1377,7 @@ class FusionContractorArrayContext(
                 new_access_descriptors = []
                 new_args = []
                 inp_gatherer = pt.transform.InputGatherer()
-                access_descr_to_axes = dict(expr.redn_descr_to_redn_dim)
+                access_descr_to_axes = dict(expr.redn_axis_to_redn_descr)
                 for iax, axis in enumerate(expr.axes):
                     access_descr_to_axes[EinsumElementwiseAxis(iax)] = axis
 
@@ -1419,30 +1427,13 @@ class FusionContractorArrayContext(
                                  tuple(new_args),
                                  tags=expr.tags,
                                  axes=expr.axes,
-                                 redn_descr_to_redn_dim=expr.redn_descr_to_redn_dim,
+                                 redn_axis_to_redn_descr=(expr
+                                                          .redn_axis_to_redn_descr),
                                  index_to_access_descr=expr.index_to_access_descr)
             else:
                 return expr
 
         dag = pt.transform.map_and_copy(dag, _get_rid_of_broadcasts_from_einsum)
-
-        # }}}
-
-        # {{{ get rid of 0-long arrays
-
-        def replace_zero_size_arrays_with_zeros(expr):
-            if isinstance(expr, pt.Array) and expr.size == 0:
-                from pytato.array import _get_default_axes
-                return pt.IndexLambda(0, expr.shape, expr.dtype,
-                                      {},
-                                      _get_default_axes(expr.ndim),
-                                      pmap(),
-                                      frozenset())
-            else:
-                return expr
-
-        dag = pt.transform.map_and_copy(dag,
-                                        replace_zero_size_arrays_with_zeros)
 
         # }}}
 
@@ -1489,6 +1480,8 @@ class FusionContractorArrayContext(
         # t_unit = simplify_indices(t_unit)
 
         knl = t_unit.default_entrypoint
+
+        logger.info(f"Transforming kernel with {len(knl.instructions)} statements.")
 
         # {{{ fallback: if the inames are not inferred which mesh entity they
         # iterate over.

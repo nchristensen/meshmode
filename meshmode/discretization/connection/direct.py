@@ -708,20 +708,21 @@ class DirectDiscretizationConnection(DiscretizationConnection):
                     for fgpd in group_pick_info:
                         from_element_indices = actx.thaw(fgpd.from_element_indices)
 
-                        grp_ary_contrib = ary[fgpd.from_group_index][
-                                    from_element_indices.reshape((-1, 1)),
-                                    actx.thaw(fgpd.dof_pick_lists)[
-                                        actx.thaw(fgpd.dof_pick_list_index)]
-                                    ]
+                        if ary[fgpd.from_group_index].size:
+                            grp_ary_contrib = ary[fgpd.from_group_index][
+                                        from_element_indices.reshape((-1, 1)),
+                                        actx.thaw(fgpd.dof_pick_lists)[
+                                            actx.thaw(fgpd.dof_pick_list_index)]
+                                        ]
 
-                        if not fgpd.is_surjective:
-                            from_el_present = actx.thaw(fgpd.from_el_present)
-                            grp_ary_contrib = actx.np.where(
-                                from_el_present.reshape((-1, 1)),
-                                grp_ary_contrib,
-                                0)
+                            if not fgpd.is_surjective:
+                                from_el_present = actx.thaw(fgpd.from_el_present)
+                                grp_ary_contrib = actx.np.where(
+                                    from_el_present.reshape((-1, 1)),
+                                    grp_ary_contrib,
+                                    0)
 
-                        group_array_contributions.append(grp_ary_contrib)
+                            group_array_contributions.append(grp_ary_contrib)
                 else:
                     for fgpd in group_pick_info:
                         group_knl_kwargs = {}
@@ -834,6 +835,12 @@ class DirectDiscretizationConnection(DiscretizationConnection):
                         shape=(self.to_discr.groups[i_tgrp].nelements,
                                self.to_discr.groups[i_tgrp].nunit_dofs),
                         dtype=ary.entry_dtype)
+
+            # attach metadata
+            group_array = tag_axes(group_array,
+                                   actx,
+                                   {0: DiscretizationElementAxisTag(),
+                                    1: DiscretizationDOFAxisTag()})
 
             group_arrays.append(group_array)
 

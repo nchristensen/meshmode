@@ -41,6 +41,8 @@ THE SOFTWARE.
 from pytools.tag import Tag, UniqueTag, tag_dataclass
 from immutables import Map
 from typing import Any
+from pytools.tag import Tag, tag_dataclass, UniqueTag
+
 
 class FirstAxisIsElementsTag(Tag):
     """A tag that is applicable to array outputs indicating that the first
