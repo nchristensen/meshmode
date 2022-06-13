@@ -1203,6 +1203,12 @@ class FusionContractorArrayContext(
     def transform_dag(self, dag):
         import pytato as pt
 
+        #print(type(dag))
+        #pt.show_ascii_graph(dag)
+        mapper = pt.transform.WalkMapper()
+        mapper(dag)
+        #exit()
+
         # {{{ CSE
 
         with ProcessLogger(logger, "transform_dag.mpms_materialization"):
@@ -1470,11 +1476,19 @@ class FusionContractorArrayContext(
         return dag
 
     def transform_loopy_program(self, t_unit):
+
         import loopy as lp
         from functools import reduce
         from arraycontext.impl.pytato.compile import FromArrayContextCompile
 
         original_t_unit = t_unit
+        print(type(t_unit))
+        print(t_unit)
+        print("ARGUMENTS")
+        print(t_unit.default_entrypoint.args)
+        for arg in t_unit.default_entrypoint.args:
+            print(arg)
+        #exit()
 
         # from loopy.transform.instruction import simplify_indices
         # t_unit = simplify_indices(t_unit)

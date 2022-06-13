@@ -164,6 +164,11 @@ class NodalToModalDiscretizationConnection(DiscretizationConnection):
             vdm_inv = la.inv(vdm)
             return actx.from_numpy(vdm_inv)
 
+        # This is not valid for a PytatoArrayContext
+        # Can't assume the argument names will not change.
+        # Should just go by argument order? But then how to
+        # differentiate the output arguments from the input
+        # arguments? Separate tags?
         kd_tag = EinsumArgsTags({"arg0": (IsOpArray(),),
                     "arg1": (IsDOFArray(),), "out": (IsDOFArray(),)})
 
