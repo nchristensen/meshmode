@@ -1755,6 +1755,46 @@ class FusionContractorArrayContext(
         t_unit = t_unit.with_kernel(knl)
         del knl
 
+        ### Start new code
+        #return t_unit
+
+        # After this is where the feinsum transformations come into play
+        # try to dump the kernels here.
+        ## Actually, now doing the dumping in array-context
+        print("===================HERE================")
+        print(t_unit)
+        import os
+        from os.path import exists
+        from hashlib import md5
+        import pickle
+
+        def unique_program_id(program):
+
+            ep = program.default_entrypoint
+            domains = ep.domains
+            instr = [str(entry) for entry in ep.instructions]
+            args = ep.args
+            name = ep.name
+
+            dstr = md5(str(domains).encode()).hexdigest()
+            istr = md5(str(instr).encode()).hexdigest()
+            astr = md5(str(args).encode()).hexdigest()
+            nstr = md5(name.encode()).hexdigest()
+            identifier = nstr[:4] + dstr[:4] + istr[:4] + astr[:4]
+
+            return identifier
+
+        pid = unique_program_id(t_unit)
+        filename = "./pickled_programs"
+        file_path = f"{filename}/prefeinsum_{pid}.pickle"
+        if not exists(file_path):
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+            out_file = open(file_path, "wb")
+            pickle.dump((t_unit, tuple(),), out_file)
+            out_file.close()
+
+        ### End new code
+
         if False and t_unit.default_entrypoint.tags_of_type(FromArrayContextCompile):
             # FIXME: Enable this branch, WIP for now and hence disabled it.
             from loopy.match import ObjTagged
