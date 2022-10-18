@@ -490,8 +490,6 @@ def _alias_global_temporaries(t_unit):
     iel_to_temps_to_free = {iel: set() for iel in all_iels}
     for tv in temp_vars:
         allocate_iel, free_iel = temp_to_iel_start[tv], temp_to_iel_end[tv]
-        if iel_order[allocate_iel] >= iel_order[free_iel]:
-            continue
         iel_to_temps_to_allocate[allocate_iel].add(tv)
         iel_to_temps_to_free[free_iel].add(tv)
 
@@ -1611,8 +1609,9 @@ class FusionContractorArrayContext(
 
         for iname in knl.all_inames():
             if not knl.iname_tags_of_type(iname, DiscretizationEntityAxisTag):
-                warn("Falling back to a slower transformation strategy as some"
-                     " loops are uninferred which mesh entity they belong to.",
+                warn(f"[{knl.name}]: Falling back to a slower transformation"
+                     " strategy as some loops are uninferred which mesh entity"
+                     " they belong to.",
                      stacklevel=2)
 
                 return super().transform_loopy_program(original_t_unit)
@@ -1621,8 +1620,9 @@ class FusionContractorArrayContext(
             for assignee in insn.assignee_var_names():
                 var = knl.get_var_descriptor(assignee)
                 if not var.tags_of_type(FEMEinsumTag):
-                    warn("Falling back to a slower transformation strategy as some"
-                         " instructions couldn't be inferred as einsums",
+                    warn(f"[{knl.name}]: Falling back to a slower transformation"
+                         " strategy as some instructions couldn't be inferred as"
+                         " einsums",
                          stacklevel=2)
 
                     return super().transform_loopy_program(original_t_unit)
@@ -1729,8 +1729,9 @@ class FusionContractorArrayContext(
             if knl.tags_of_type(FromArrayContextCompile):
                 raise err
             else:
-                warn("FusionContractorArrayContext.transform_loopy_program not"
-                     " broad enough (yet). Falling back to a possibly slower"
+                warn(f"[{knl.name}]: FusionContractorArrayContext."
+                     "transform_loopy_program not broad enough (yet)."
+                     " Falling back to a possibly slower"
                      " transformation strategy.")
                 return super().transform_loopy_program(original_t_unit)
 
