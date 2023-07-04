@@ -233,6 +233,174 @@ class PyOpenCLArrayContext(PyOpenCLArrayContextBase):
                     "Did you use arraycontext.make_loopy_program "
                     "to create this kernel?")
 
+        # Step 7.5 Dump kernels before feinsum is invoked
+        ### Start new code - Dump kernels before feinsum is invoked
+
+        # Pickle program and (index) arguments here 
+        # Hacky way, look for integer arrays
+
+        # After this is where the feinsum transformations come into play
+        # try to dump the kernels here.
+        ## Dumping in array-context adds the index arrays
+        print("===================HERE================")
+        #t_unit = pt_prg.program
+        print(t_unit)
+        import os
+        from os.path import exists
+        from hashlib import md5
+        import pickle
+
+
+        def unique_program_id(tunit, attempt_normalization=True):
+            from loopy.tools import LoopyKeyBuilder
+            kb = LoopyKeyBuilder()
+
+            assert len(tunit.entrypoints) == 1 # Only works for tunits with one entrypoint at present
+
+            # The program name is not relevant for transformation purposes.
+            # (Neither are the variable names, but I'm not going to touch that)
+            # Maybe feinsum has some capability for that?
+
+            # Kernel may not necessarily be an einsum, but for now assume it is
+            # (the tuner also doesn't care if there are einsums with different loop
+            # dimensions in the same kernel
+
+            key = kb(tunit.default_entrypoint.copy(name="loopy_kernel"))
+            if attempt_normalization:
+                import feinsum as f
+                try:
+                    # Not every einsum can currently be normalized, for instance
+                    # if it has a non-reduction RHS or if it has indirection
+                    canonical_einsum = f.normalize_einsum(f.match_einsum(tunit))
+                    normalized_key = kb(canonical_einsum)
+                    print("Successfully normalized einsum")
+                    #print(canonical_einsum)
+
+                    #from __init__ import get_einsum_counts
+                    #einsum_counts = list(get_einsum_counts(tunit).items())
+                    #einsum_type, count = einsum_counts[0]
+                    #if count == 4:
+                    #    exit()
+                except Exception:
+                    normalized_key = None
+                    #print("Failed to normalize tunit, using non-normalized program_id.")
+                    #key = kb(tunit.default_entrypoint.copy(name="loopy_kernel"))
+
+            return key, normalized_key
+
+
+        """
+        def unique_program_id(program):
+
+            ep = program.default_entrypoint
+            domains = ep.domains
+            instr = [str(entry) for entry in ep.instructions]
+            args = ep.args
+            name = ep.name
+
+            dstr = md5(str(domains).encode()).hexdigest()
+            istr = md5(str(instr).encode()).hexdigest()
+            astr = md5(str(args).encode()).hexdigest()
+            nstr = md5(name.encode()).hexdigest()
+            identifier = nstr[:4] + dstr[:4] + istr[:4] + astr[:4]
+
+            return identifier 
+        """
+
+        pid, norm_pid = unique_program_id(t_unit)
+
+        mpi_comm = getattr(self, "mpi_communicator", None)
+        rank = mpi_comm.Get_rank()
+
+        map_to_pid = None
+        """
+        if mpi_comm is not None:
+            max_dim = 0
+            for arg in t_unit.default_entrypoint.args:
+                for dim in arg.shape:
+                    max_dim = max(max_dim, dim)
+    
+            # What about when the kernel is small and n_out*n_elem <=1024?
+            data = np.array([max_dim, pid])
+            from mpi4py.MPI import Op, IN_PLACE
+            op = Op.Create(lambda a, b: np.max(a[0], b[0]), commute=True)
+            mpi_comm.Allreduce(IN_PLACE, data,op=op)
+            map_to_pid = data[1]
+        """
+
+        filename = "./pickled_programs"
+        file_path = f"{filename}/prefeinsum_{pid}_{rank}.pickle"
+        call_count_path = f"{filename}/call_count_{rank}.pickle"
+        from frozendict import frozendict
+
+        if not exists(file_path):
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+            out_file = open(file_path, "wb")
+            # Arguments may actually not be needed...
+            arguments = [] # The arguments aren't passed into
+            #for entry in bound_arguments.items():
+            #    if np.issubdtype(entry[1].dtype, np.integer):
+            #        arguments.append((entry[0], entry[1].get(),))
+
+            # In eager mode, the einsum tags aren't added, but the tuner still needs the tags
+            # so add them here.
+            out_dict = frozendict({"tunit": t_unit,
+                                    "args": tuple(arguments), 
+                                    "map_to_pid": map_to_pid, 
+                                    "normalized_pid":norm_pid})
+            pickle.dump(out_dict, out_file)
+            #pickle.dump((t_unit, tuple(arguments),), out_file)
+            #pickle.dump(t_unit, out_file)
+
+            out_file.close()
+
+            #in_file = open(file_path, "rb")
+            #loaded = pickle.load(in_file)
+            #print("Loaded tunit")
+            #print(loaded["tunit"])
+
+
+        if not exists(call_count_path):
+            call_counts = {}
+        else:
+            call_count_file = open(call_count_path, "rb")
+            call_counts = dict(pickle.load(call_count_file))
+            call_count_file.close()
+
+        if pid in call_counts:
+            call_counts[pid] += 1
+        else:
+            call_counts[pid] = 1
+
+        call_count_file = open(call_count_path, "wb")
+        pickle.dump(frozendict(call_counts), call_count_file)
+        call_count_file.close()
+
+        """
+        else:
+            in_file = open(file_path, "rb")
+            arguments = [] # The arguments aren't passed into
+            dic = pickle.load(in_file)
+            out_dict = frozendict({"tunit": t_unit, 
+                                   "args": tuple(arguments), 
+                                   "map_to_pid": map_to_pid, 
+                                   "calls": dic["calls"] + 1,
+                                   "normalized_pid":norm_pid})
+            in_file.close()
+            out_file = open(file_path, "wb")
+            pickle.dump(out_dict, out_file)
+            #pickle.dump((t_unit, tuple(arguments),), out_file)
+            #pickle.dump(t_unit, out_file)
+
+            out_file.close()
+
+
+
+            ### End new code        
+        #exit()
+        """
+
+
         transformed_t_unit = _transform_loopy_inner(t_unit)
 
         if transformed_t_unit is not None:
@@ -1659,7 +1827,7 @@ class FusionContractorArrayContext(
 
         knl = _prepare_kernel_for_parallelization(knl)
         knl = _combine_einsum_domains(knl)
-
+    
         # }}}
 
         # {{{ array contraction
@@ -1761,12 +1929,186 @@ class FusionContractorArrayContext(
 
         # }}}
 
+        #print(knl)
         t_unit = _alias_global_temporaries(t_unit)
-
-        # {{{ Parallelization strategy: Use feinsum
 
         t_unit = t_unit.with_kernel(knl)
         del knl
+
+
+        # {{{ Parallelization strategy: Use feinsum
+
+        # Step 7.5 Dump kernels before feinsum is invoked
+        ### Start new code - Dump kernels before feinsum is invoked
+
+        # Pickle program and (index) arguments here 
+        # Hacky way, look for integer arrays
+
+        # After this is where the feinsum transformations come into play
+        # try to dump the kernels here.
+        ## Dumping in array-context adds the index arrays
+        print("===================HERE================")
+        #t_unit = pt_prg.program
+        #print(t_unit.default_entrypoint)
+        import os
+        from os.path import exists
+        from hashlib import md5
+        import pickle
+
+
+        def unique_program_id(tunit, attempt_normalization=True):
+            from loopy.tools import LoopyKeyBuilder
+            kb = LoopyKeyBuilder()
+
+            assert len(tunit.entrypoints) == 1 # Only works for tunits with one entrypoint at present
+
+            # The program name is not relevant for transformation purposes.
+            # (Neither are the variable names, but I'm not going to touch that)
+            # Maybe feinsum has some capability for that?
+
+            # Kernel may not necessarily be an einsum, but for now assume it is
+            # (the tuner also doesn't care if there are einsums with different loop
+            # dimensions in the same kernel
+
+            key = kb(tunit.default_entrypoint.copy(name="loopy_kernel"))
+            if attempt_normalization:
+                import feinsum as f
+                try:
+                    # Not every einsum can currently be normalized, for instance
+                    # if it has a non-reduction RHS or if it has indirection
+                    canonical_einsum = f.normalize_einsum(f.match_einsum(tunit))
+                    normalized_key = kb(canonical_einsum)
+                    print("Successfully normalized einsum")
+                    #print(canonical_einsum)
+
+                    #from __init__ import get_einsum_counts
+                    #einsum_counts = list(get_einsum_counts(tunit).items())
+                    #einsum_type, count = einsum_counts[0]
+                    #if count == 4:
+                    #    exit()
+                except Exception:
+                    normalized_key = None
+                    #print("Failed to normalize tunit, using non-normalized program_id.")
+                    #key = kb(tunit.default_entrypoint.copy(name="loopy_kernel"))
+
+            return key, normalized_key
+
+
+        """
+        def unique_program_id(program):
+
+            ep = program.default_entrypoint
+            domains = ep.domains
+            instr = [str(entry) for entry in ep.instructions]
+            args = ep.args
+            name = ep.name
+
+            dstr = md5(str(domains).encode()).hexdigest()
+            istr = md5(str(instr).encode()).hexdigest()
+            astr = md5(str(args).encode()).hexdigest()
+            nstr = md5(name.encode()).hexdigest()
+            identifier = nstr[:4] + dstr[:4] + istr[:4] + astr[:4]
+
+            return identifier 
+        """
+
+        pid, norm_pid = unique_program_id(t_unit)
+
+        mpi_comm = getattr(self, "mpi_communicator", None)
+        rank = mpi_comm.Get_rank()
+
+        map_to_pid = None
+        """
+        if mpi_comm is not None:
+            max_dim = 0
+            for arg in t_unit.default_entrypoint.args:
+                for dim in arg.shape:
+                    max_dim = max(max_dim, dim)
+    
+            # What about when the kernel is small and n_out*n_elem <=1024?
+            data = np.array([max_dim, pid])
+            from mpi4py.MPI import Op, IN_PLACE
+            op = Op.Create(lambda a, b: np.max(a[0], b[0]), commute=True)
+            mpi_comm.Allreduce(IN_PLACE, data,op=op)
+            map_to_pid = data[1]
+        """
+
+        filename = "./pickled_programs"
+        file_path = f"{filename}/prefeinsum_{pid}_{rank}.pickle"
+        call_count_path = f"{filename}/call_count_{rank}.pickle"
+        from frozendict import frozendict
+
+        #print(t_unit.default_entrypoint)
+        #print("PRINTING INSTRUCTION TAGS")
+        #for instr in t_unit.default_entrypoint.instructions:
+        #    print(instr.tags)
+        #exit()
+
+        if not exists(file_path):
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+            out_file = open(file_path, "wb")
+            # Arguments may actually not be needed...
+            arguments = [] # The arguments aren't passed into
+            #for entry in bound_arguments.items():
+            #    if np.issubdtype(entry[1].dtype, np.integer):
+            #        arguments.append((entry[0], entry[1].get(),))
+            out_dict = frozendict({"tunit": t_unit,
+                                    "args": tuple(arguments), 
+                                    "map_to_pid": map_to_pid, 
+                                    "normalized_pid":norm_pid})
+            pickle.dump(out_dict, out_file)
+            #pickle.dump((t_unit, tuple(arguments),), out_file)
+            #pickle.dump(t_unit, out_file)
+
+            out_file.close()
+
+            #in_file = open(file_path, "rb")
+            #loaded = pickle.load(in_file)
+            #print("Loaded tunit")
+            #print(loaded["tunit"])
+
+
+        if not exists(call_count_path):
+            call_counts = {}
+        else:
+            call_count_file = open(call_count_path, "rb")
+            call_counts = dict(pickle.load(call_count_file))
+            call_count_file.close()
+
+        if pid in call_counts:
+            call_counts[pid] += 1
+        else:
+            call_counts[pid] = 1
+
+        call_count_file = open(call_count_path, "wb")
+        pickle.dump(frozendict(call_counts), call_count_file)
+        call_count_file.close()
+
+        """
+        else:
+            in_file = open(file_path, "rb")
+            arguments = [] # The arguments aren't passed into
+            dic = pickle.load(in_file)
+            out_dict = frozendict({"tunit": t_unit, 
+                                   "args": tuple(arguments), 
+                                   "map_to_pid": map_to_pid, 
+                                   "calls": dic["calls"] + 1,
+                                   "normalized_pid":norm_pid})
+            in_file.close()
+            out_file = open(file_path, "wb")
+            pickle.dump(out_dict, out_file)
+            #pickle.dump((t_unit, tuple(arguments),), out_file)
+            #pickle.dump(t_unit, out_file)
+
+            out_file.close()
+
+
+
+            ### End new code        
+        #exit()
+        """
+
+
 
         if False and t_unit.default_entrypoint.tags_of_type(FromArrayContextCompile):
             # FIXME: Enable this branch, WIP for now and hence disabled it.
