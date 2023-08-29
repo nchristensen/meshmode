@@ -2108,7 +2108,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
         return t_unit
 
 
-class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayContext):
+class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayContextBase):
 
     def transform_loopy_program(self, t_unit):
         import loopy as lp
