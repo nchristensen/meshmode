@@ -49,7 +49,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Is there a smart way of choosing this number?
-# Currenly it is the same as the base from MPIBoundaryCommSetupHelper
+# Currently it is the same as the base from MPIBoundaryCommSetupHelper
 TAG_BASE = 83411
 TAG_SEND_REMOTE_NODES = TAG_BASE + 3
 TAG_SEND_LOCAL_NODES = TAG_BASE + 4
@@ -333,12 +333,12 @@ def test_partition_mesh(mesh_size, num_parts, num_groups, dim, scramble_parts):
                         for idx in range(len(adj.elements)):
                             if (p_elem == adj.elements[idx]
                                      and face == adj.element_faces[idx]):
-                                assert p_n_elem == adj.neighbors[idx],\
+                                assert p_n_elem == adj.neighbors[idx], \
                                         "Tag does not give correct neighbor"
-                                assert n_face == adj.neighbor_faces[idx],\
+                                assert n_face == adj.neighbor_faces[idx], \
                                         "Tag does not give correct neighbor"
 
-    assert ipagrp_count > 0 or not has_cross_rank_adj,\
+    assert ipagrp_count > 0 or not has_cross_rank_adj, \
         "expected at least one InterPartAdjacencyGroup"
 
     for i_remote_part in range(num_parts):
@@ -347,7 +347,7 @@ def test_partition_mesh(mesh_size, num_parts, num_groups, dim, scramble_parts):
             if (i_local_part, i_remote_part) in connected_parts:
                 tag_sum += count_tags(
                     part_meshes[i_local_part], BTAG_PARTITION(i_remote_part))
-        assert num_tags[i_remote_part] == tag_sum,\
+        assert num_tags[i_remote_part] == tag_sum, \
                 "part_mesh has the wrong number of BTAG_PARTITION boundaries"
 
 
