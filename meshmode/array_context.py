@@ -233,6 +233,7 @@ class PyOpenCLArrayContext(PyOpenCLArrayContextBase):
                     "Did you use arraycontext.make_loopy_program "
                     "to create this kernel?")
 
+        '''
         # Step 7.5 Dump kernels before feinsum is invoked
         ### Start new code - Dump kernels before feinsum is invoked
 
@@ -249,7 +250,6 @@ class PyOpenCLArrayContext(PyOpenCLArrayContextBase):
         from os.path import exists
         from hashlib import md5
         import pickle
-
 
         def unique_program_id(tunit, attempt_normalization=True):
             from loopy.tools import LoopyKeyBuilder
@@ -399,7 +399,7 @@ class PyOpenCLArrayContext(PyOpenCLArrayContextBase):
             ### End new code        
         #exit()
         """
-
+        '''
 
         transformed_t_unit = _transform_loopy_inner(t_unit)
 
@@ -2031,7 +2031,9 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
 
         filename = "./pickled_programs"
         os.makedirs(os.path.dirname(filename), exist_ok=True)
-        file_path = f"{filename}/prefeinsum_{pid}_{rank}.pickle"
+
+
+        file_path = f"{filename}/prefeinsum_{pid}.pickle"
         call_count_path = f"{filename}/call_count_{rank}.pickle"
         from frozendict import frozendict
 
@@ -2041,28 +2043,42 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
         #    print(instr.tags)
         #exit()
 
+        # Only the smallest rank with this pid should write to disk.
+
         if not exists(file_path):
-            os.makedirs(os.path.dirname(filename), exist_ok=True)
-            out_file = open(file_path, "wb")
-            # Arguments may actually not be needed...
-            arguments = [] # The arguments aren't passed into
-            #for entry in bound_arguments.items():
-            #    if np.issubdtype(entry[1].dtype, np.integer):
-            #        arguments.append((entry[0], entry[1].get(),))
-            out_dict = frozendict({"tunit": t_unit,
-                                    "args": tuple(arguments), 
-                                    "map_to_pid": map_to_pid, 
-                                    "normalized_pid":norm_pid})
-            pickle.dump(out_dict, out_file)
-            #pickle.dump((t_unit, tuple(arguments),), out_file)
-            #pickle.dump(t_unit, out_file)
 
-            out_file.close()
+            local_have = [(rank, pid,)]
+            global_have = mpi_comm.alltoall(local_have)
+            global_have = np.array(global_have)
+            smallest_rank = np.sort(global_have[global_have[:,1] == pid, :], axis=0)[0,0]
+            
+            print("Sorted and downselected pids")
+            print(np.sort(global_have[global_have[:,1] == pid, :], axis=0))
+            exit()
 
-            #in_file = open(file_path, "rb")
-            #loaded = pickle.load(in_file)
-            #print("Loaded tunit")
-            #print(loaded["tunit"])
+            if smallest_rank == rank:
+
+                os.makedirs(os.path.dirname(filename), exist_ok=True)
+                out_file = open(file_path, "wb")
+                # Arguments may actually not be needed...
+                arguments = [] # The arguments aren't passed into
+                #for entry in bound_arguments.items():
+                #    if np.issubdtype(entry[1].dtype, np.integer):
+                #        arguments.append((entry[0], entry[1].get(),))
+                out_dict = frozendict({"tunit": t_unit,
+                                        "args": tuple(arguments), 
+                                        "map_to_pid": map_to_pid, 
+                                        "normalized_pid":norm_pid})
+                pickle.dump(out_dict, out_file)
+                #pickle.dump((t_unit, tuple(arguments),), out_file)
+                #pickle.dump(t_unit, out_file)
+
+                out_file.close()
+
+                #in_file = open(file_path, "rb")
+                #loaded = pickle.load(in_file)
+                #print("Loaded tunit")
+                #print(loaded["tunit"])
 
 
         if not exists(call_count_path):
@@ -2111,12 +2127,16 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
 class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayContextBase):
 
     def transform_loopy_program(self, t_unit):
+
+        # TODO: Not all macro-kernels are worth tuning (probably). Should fall back
+        # to the FusionContractorArrayContext transformations for these.
+
         import loopy as lp
         original_tunit = t_unit
 
         import os
-        filename = "./pickled_programs"
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        dirname = "./pickled_programs"
+        os.makedirs(os.path.dirname(dirname), exist_ok=True)
  
         # Dump out the macro-kernel of this process
         # (Currently using the disk to communicate the pickled
@@ -2124,14 +2144,19 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         t_unit = super().transform_loopy_program(t_unit)
 
         # Generate the PID of this processes' macrokernel and share with all processes
+        mpi_comm = getattr(self, "mpi_communicator", None)
         from tagtune.utils import unique_program_id
-        my_pid = unique_program_id(t_unit) 
+        my_pid = unique_program_id(t_unit)
+       
+        pids = mpi_comm.alltoall([my_pid])
+        pids = sorted(set(pids))
 
         # Tune/transform all of the macrokernels with these PIDs
         # (Ideally, this would make use of the tuning results of similar kernels to
         # inform the Bayesian transformation space, but this is not currently implemented.)
         # Should probably be handled by the tuner in any case.
-        files = sorted([filename + "/" + pid + ".pickle" for pid in pids])
+
+        files = sorted([dirname + "/" + pid + ".pickle" for pid in pids])
         # from tagtune.<something> import get_pickled_tunits
         p_tunit_dicts = get_pickled_tunits(files)
 
