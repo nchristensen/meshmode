@@ -1902,20 +1902,6 @@ class FusionContractorArrayContextBase(SingleGridWorkBalancingPytatoArrayContext
         # }}}
 
 
-        # {{{ insert barriers between consecutive iel-loops
-
-        toposorted_iels = _get_element_loop_topo_sorted_order(knl)
-
-        for iel_pred, iel_succ in zip(toposorted_iels[:-1],
-                                      toposorted_iels[1:]):
-            knl = lp.add_barrier(knl,
-                                 insn_before=f"iname:{iel_pred}",
-                                 insn_after=f"iname:{iel_succ}")
-
-        # }}}
-
-        #print(knl)
-        t_unit = _alias_global_temporaries(t_unit)
 
         t_unit = t_unit.with_kernel(knl)
         del knl
@@ -1932,7 +1918,48 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
 
         original_t_unit = t_unit
 
+        # from loopy.transform.instruction import simplify_indices
+        # t_unit = simplify_indices(t_unit)
+
         t_unit = super().transform_loopy_program(t_unit)
+
+        knl = t_unit.default_entrypoint
+
+        # {{{ check whether we can parallelize the kernel
+
+        try:
+            iel_to_idofs = _get_iel_to_idofs(knl)
+        except NotImplementedError as err:
+            if knl.tags_of_type(FromArrayContextCompile):
+                raise err
+            else:
+                warn(f"[{knl.name}]: FusionContractorArrayContext."
+                     "transform_loopy_program not broad enough (yet)."
+                     " Falling back to a possibly slower"
+                     " transformation strategy.")
+                return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_t_unit)
+
+        # }}}
+
+
+        # {{{ insert barriers between consecutive iel-loops
+
+        toposorted_iels = _get_element_loop_topo_sorted_order(knl)
+
+        for iel_pred, iel_succ in zip(toposorted_iels[:-1],
+                                      toposorted_iels[1:]):
+            knl = lp.add_barrier(knl,
+                                 insn_before=f"iname:{iel_pred}",
+                                 insn_after=f"iname:{iel_succ}")
+
+        # }}}
+
+        #print(knl)
+        t_unit = _alias_global_temporaries(original_t_unit)
+        t_unit = t_unit.with_kernel(knl)
+        del knl
+
+
 
         # Step 7.5 Dump kernels before feinsum is invoked
         ### Start new code - Dump kernels before feinsum is invoked
@@ -2028,11 +2055,11 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
         """
 
         filename = "./pickled_programs"
+        # Doesn't actually create a directory on Crusher.
         os.makedirs(os.path.dirname(filename), exist_ok=True)
 
-
         file_path = f"{filename}/prefeinsum_{pid}.pickle"
-        call_count_path = f"{filename}/call_count_{rank}.pickle"
+        #call_count_path = f"{filename}/call_count_{rank}.pickle"
         from frozendict import frozendict
 
         #print(t_unit.default_entrypoint)
@@ -2062,7 +2089,6 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
             # Only the smallest rank with this pid should write to disk.
             if smallest_rank == rank:
 
-                os.makedirs(os.path.dirname(filename), exist_ok=True)
                 out_file = open(file_path, "wb")
                 # Arguments may actually not be needed...
                 arguments = [] # The arguments aren't passed into
@@ -2085,6 +2111,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
                 #print(loaded["tunit"])
 
 
+        """
         if not exists(call_count_path):
             call_counts = {}
         else:
@@ -2100,6 +2127,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
         call_count_file = open(call_count_path, "wb")
         pickle.dump(frozendict(call_counts), call_count_file)
         call_count_file.close()
+        """
 
         """
         else:
@@ -2196,21 +2224,41 @@ class FusionContractorArrayContext(FusionContractorArrayContextBase):
 
         t_unit = super().transform_loopy_program(t_unit)
 
+        knl = t_unit.default_entrypoint
+
         # {{{ check whether we can parallelize the kernel
 
         try:
-            iel_to_idofs = _get_iel_to_idofs(t_unit.default_entrypoint)
+            iel_to_idofs = _get_iel_to_idofs(knl)
         except NotImplementedError as err:
-            if t_unit.default_entrypoint.tags_of_type(FromArrayContextCompile):
+            if knl.tags_of_type(FromArrayContextCompile):
                 raise err
             else:
-                warn(f"[{t_unit.default_entrypoint.name}]: FusionContractorArrayContext."
+                warn(f"[{knl.name}]: FusionContractorArrayContext."
                      "transform_loopy_program not broad enough (yet)."
                      " Falling back to a possibly slower"
                      " transformation strategy.")
-                # Call grandparent transform_loopy_program
                 return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_t_unit)
+
         # }}}
+
+
+        # {{{ insert barriers between consecutive iel-loops
+
+        toposorted_iels = _get_element_loop_topo_sorted_order(knl)
+
+        for iel_pred, iel_succ in zip(toposorted_iels[:-1],
+                                      toposorted_iels[1:]):
+            knl = lp.add_barrier(knl,
+                                 insn_before=f"iname:{iel_pred}",
+                                 insn_after=f"iname:{iel_succ}")
+
+        # }}}
+
+        #print(knl)
+        t_unit = _alias_global_temporaries(original_t_unit)
+        t_unit = t_unit.with_kernel(knl)
+        del knl
 
 
         # {{{ Parallelization strategy: Use feinsum
@@ -2280,7 +2328,8 @@ class FusionContractorArrayContext(FusionContractorArrayContextBase):
 
         return t_unit
 
-
+# This doesn't seem like it should work. Since _get_iel_to_idofs should
+# have already been called.
 class PrefusedFusionContractorArrayContext(FusionContractorArrayContextBase):
 
     # Does not call super() as it assumes the input is a fused t_unit. 
@@ -2919,6 +2968,7 @@ class FusionContractorArrayContextOld(
         t_unit = t_unit.with_kernel(knl)
         del knl
 
+        '''
 
         # {{{ Parallelization strategy: Use feinsum
 
@@ -3091,7 +3141,7 @@ class FusionContractorArrayContextOld(
             ### End new code        
         #exit()
         """
-
+        '''
 
 
         if False and t_unit.default_entrypoint.tags_of_type(FromArrayContextCompile):
