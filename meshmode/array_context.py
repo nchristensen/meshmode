@@ -2010,8 +2010,6 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
 
         pid, norm_pid = unique_program_id(t_unit)
 
-        mpi_comm = getattr(self, "mpi_communicator", None)
-        rank = mpi_comm.Get_rank()
 
         map_to_pid = None
         """
@@ -2043,19 +2041,25 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
         #    print(instr.tags)
         #exit()
 
-        # Only the smallest rank with this pid should write to disk.
 
         if not exists(file_path):
 
-            local_have = [(rank, pid,)]
-            global_have = mpi_comm.alltoall(local_have)
-            global_have = np.array(global_have)
-            smallest_rank = np.sort(global_have[global_have[:,1] == pid, :], axis=0)[0,0]
-            
-            print("Sorted and downselected pids")
-            print(np.sort(global_have[global_have[:,1] == pid, :], axis=0))
-            exit()
+            mpi_comm = getattr(self, "mpi_communicator", None)
+            if mpi_comm is not None:
+                rank = mpi_comm.Get_rank()
+                local_have = [(rank, pid,)]
+                global_have = mpi_comm.alltoall(local_have)
+                global_have = np.array(global_have)
+                smallest_rank = np.sort(global_have[global_have[:,1] == pid, :], axis=0)[0,0]
+                
+                print("Sorted and downselected pids")
+                print(np.sort(global_have[global_have[:,1] == pid, :], axis=0))
+                exit()
+            else:
+                rank = 0
+                smallest_rank = 0
 
+            # Only the smallest rank with this pid should write to disk.
             if smallest_rank == rank:
 
                 os.makedirs(os.path.dirname(filename), exist_ok=True)
@@ -2147,8 +2151,11 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         mpi_comm = getattr(self, "mpi_communicator", None)
         from tagtune.utils import unique_program_id
         my_pid = unique_program_id(t_unit)
-       
-        pids = mpi_comm.alltoall([my_pid])
+      
+        if mpi_comm is not None:
+            pids = mpi_comm.alltoall([my_pid])
+        else:
+            pids = [my_pid]
         pids = sorted(set(pids))
 
         # Tune/transform all of the macrokernels with these PIDs
