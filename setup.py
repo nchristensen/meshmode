@@ -49,6 +49,7 @@ def main():
 
               "arraycontext",
               "recursivenodes",
+              "frozendict"
               ],
           extras_require={
               "visualization": ["h5py"],
