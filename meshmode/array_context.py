@@ -1929,39 +1929,39 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
 
         try:
             iel_to_idofs = _get_iel_to_idofs(knl)
+
+            # {{{ insert barriers between consecutive iel-loops
+
+            toposorted_iels = _get_element_loop_topo_sorted_order(knl)
+
+            for iel_pred, iel_succ in zip(toposorted_iels[:-1],
+                                          toposorted_iels[1:]):
+                knl = lp.add_barrier(knl,
+                                     insn_before=f"iname:{iel_pred}",
+                                     insn_after=f"iname:{iel_succ}")
+
+            # }}}
+
+            #print(knl)
+            t_unit = _alias_global_temporaries(original_t_unit)
+            t_unit = t_unit.with_kernel(knl)
+            del knl
+
         except NotImplementedError as err:
             if knl.tags_of_type(FromArrayContextCompile):
                 raise err
             else:
                 warn(f"[{knl.name}]: FusionContractorArrayContext."
-                     "transform_loopy_program not broad enough (yet)."
-                     " Falling back to a possibly slower"
-                     " transformation strategy.")
-                return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_t_unit)
+                     "transform_loopy_program not broad enough (yet).")
+                     #" Falling back to a possibly slower"
+                     #" transformation strategy.")
+
+                # Call grandparent. Actually, let's just have it return dump the untransformed kernel.
+                #t_unit =  super(FusionContractorArrayContextBase, self).transform_loopy_program(original_t_unit)
 
         # }}}
 
 
-        # {{{ insert barriers between consecutive iel-loops
-
-        toposorted_iels = _get_element_loop_topo_sorted_order(knl)
-
-        for iel_pred, iel_succ in zip(toposorted_iels[:-1],
-                                      toposorted_iels[1:]):
-            knl = lp.add_barrier(knl,
-                                 insn_before=f"iname:{iel_pred}",
-                                 insn_after=f"iname:{iel_succ}")
-
-        # }}}
-
-        #print(knl)
-        t_unit = _alias_global_temporaries(original_t_unit)
-        t_unit = t_unit.with_kernel(knl)
-        del knl
-
-
-
-        # Step 7.5 Dump kernels before feinsum is invoked
         ### Start new code - Dump kernels before feinsum is invoked
 
         # Pickle program and (index) arguments here 
@@ -1977,7 +1977,9 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
         from os.path import exists
         import pickle
 
-
+        from tagtune.utils import unique_program_id
+        
+        """
         def unique_program_id(tunit, attempt_normalization=True):
             from loopy.tools import LoopyKeyBuilder
             kb = LoopyKeyBuilder()
@@ -2014,7 +2016,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
                     #key = kb(tunit.default_entrypoint.copy(name="loopy_kernel"))
 
             return key, normalized_key
-
+        """
 
         """
         def unique_program_id(program):
@@ -2035,8 +2037,11 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
             return identifier 
         """
 
-        pid, norm_pid = unique_program_id(t_unit)
+        pid = unique_program_id(t_unit, attempt_normalization=False)
+        norm_pid = unique_program_id(t_unit, attempt_normalization=True)
 
+        print("===========PID===========")
+        print(pid)
 
         map_to_pid = None
         """
@@ -2098,7 +2103,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
                 out_dict = frozendict({"tunit": t_unit,
                                         "args": tuple(arguments), 
                                         "map_to_pid": map_to_pid, 
-                                        "normalized_pid":norm_pid})
+                                        "normalized_pid": norm_pid})
                 pickle.dump(out_dict, out_file)
                 #pickle.dump((t_unit, tuple(arguments),), out_file)
                 #pickle.dump(t_unit, out_file)
@@ -2138,7 +2143,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
                                    "args": tuple(arguments), 
                                    "map_to_pid": map_to_pid, 
                                    "calls": dic["calls"] + 1,
-                                   "normalized_pid":norm_pid})
+                                   "normalized_pid": norm_pid})
             in_file.close()
             out_file = open(file_path, "wb")
             pickle.dump(out_dict, out_file)
@@ -2152,6 +2157,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
             ### End new code        
         #exit()
         """
+        print("ALSO PID", unique_program_id(t_unit, attempt_normalization=False))
 
         return t_unit
 
@@ -2174,17 +2180,19 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         # (Currently using the disk to communicate the pickled
         # macrokernels)
         t_unit = super().transform_loopy_program(t_unit)
+        from tagtune.utils import unique_program_id
+        my_pid = unique_program_id(t_unit)
+        print("ALSO ALSO PID", my_pid)
 
         # Generate the PID of this processes' macrokernel and share with all processes
         mpi_comm = getattr(self, "mpi_communicator", None)
-        from tagtune.utils import unique_program_id
-        my_pid = unique_program_id(t_unit)
       
         if mpi_comm is not None:
             pids = mpi_comm.alltoall([my_pid])
         else:
             pids = [my_pid]
         pids = sorted(set(pids))
+        print(pids)
 
         # Tune/transform all of the macrokernels with these PIDs
         # (Ideally, this would make use of the tuning results of similar kernels to
@@ -2192,6 +2200,8 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         # Should probably be handled by the tuner in any case.
 
         files = sorted([dirname + "/prefeinsum_" + pid + ".pickle" for pid in pids])
+        for f in files:
+            assert os.path.exists(os.path.normpath(f)), f"{f} does not exist"
 
         from tagtune.test_fused_autotuning import get_pickled_tunits, transform_macrokernel
 
