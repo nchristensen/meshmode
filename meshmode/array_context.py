@@ -2191,15 +2191,17 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         # inform the Bayesian transformation space, but this is not currently implemented.)
         # Should probably be handled by the tuner in any case.
 
-        files = sorted([dirname + "/" + pid + ".pickle" for pid in pids])
-        # from tagtune.<something> import get_pickled_tunits
+        files = sorted([dirname + "/prefeinsum_" + pid + ".pickle" for pid in pids])
+
+        from tagtune.test_fused_autotuning import get_pickled_tunits, transform_macrokernel
+
         p_tunit_dicts = get_pickled_tunits(files)
 
         return_tunit = None
         for p_tunit_dict in p_tunit_dicts:
             # Tune each subkernel within each macrokernel in parallel
             # or just apply the transformations if tuning has already been done.
-            t_unit = transform_macrokernel(p_tunit_dict, file_name + "/hjson")
+            t_unit = transform_macrokernel(p_tunit_dict, "./autotuning_files")
             if my_pid in p_tunit_dict[0]:
                 return_tunit = t_unit
 
