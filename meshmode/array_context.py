@@ -1979,64 +1979,6 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
 
         from tagtune.utils import unique_program_id
         
-        """
-        def unique_program_id(tunit, attempt_normalization=True):
-            from loopy.tools import LoopyKeyBuilder
-            kb = LoopyKeyBuilder()
-
-            assert len(tunit.entrypoints) == 1 # Only works for tunits with one entrypoint at present
-
-            # The program name is not relevant for transformation purposes.
-            # (Neither are the variable names, but I'm not going to touch that)
-            # Maybe feinsum has some capability for that?
-
-            # Kernel may not necessarily be an einsum, but for now assume it is
-            # (the tuner also doesn't care if there are einsums with different loop
-            # dimensions in the same kernel
-
-            key = kb(tunit.default_entrypoint.copy(name="loopy_kernel"))
-            if attempt_normalization:
-                import feinsum as f
-                try:
-                    # Not every einsum can currently be normalized, for instance
-                    # if it has a non-reduction RHS or if it has indirection
-                    canonical_einsum = f.normalize_einsum(f.match_einsum(tunit))
-                    normalized_key = kb(canonical_einsum)
-                    print("Successfully normalized einsum")
-                    #print(canonical_einsum)
-
-                    #from __init__ import get_einsum_counts
-                    #einsum_counts = list(get_einsum_counts(tunit).items())
-                    #einsum_type, count = einsum_counts[0]
-                    #if count == 4:
-                    #    exit()
-                except Exception:
-                    normalized_key = None
-                    #print("Failed to normalize tunit, using non-normalized program_id.")
-                    #key = kb(tunit.default_entrypoint.copy(name="loopy_kernel"))
-
-            return key, normalized_key
-        """
-
-        """
-        def unique_program_id(program):
-            from hashlib import md5
-
-            ep = program.default_entrypoint
-            domains = ep.domains
-            instr = [str(entry) for entry in ep.instructions]
-            args = ep.args
-            name = ep.name
-
-            dstr = md5(str(domains).encode()).hexdigest()
-            istr = md5(str(instr).encode()).hexdigest()
-            astr = md5(str(args).encode()).hexdigest()
-            nstr = md5(name.encode()).hexdigest()
-            identifier = nstr[:4] + dstr[:4] + istr[:4] + astr[:4]
-
-            return identifier 
-        """
-
         pid = unique_program_id(t_unit, attempt_normalization=False)
         norm_pid = unique_program_id(t_unit, attempt_normalization=True)
 
@@ -2079,14 +2021,14 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
             mpi_comm = getattr(self, "mpi_communicator", None)
             if mpi_comm is not None:
                 rank = mpi_comm.Get_rank()
-                local_have = [(rank, pid,)]
+                local_have = [(rank, pid,)]*mpi_comm.Get_size()
                 global_have = mpi_comm.alltoall(local_have)
                 global_have = np.array(global_have)
-                smallest_rank = np.sort(global_have[global_have[:,1] == pid, :], axis=0)[0,0]
-                
+
+                smallest_rank = int(np.sort(global_have[global_have[:,1] == pid, :], axis=0)[0,0])
                 print("Sorted and downselected pids")
                 print(np.sort(global_have[global_have[:,1] == pid, :], axis=0))
-                exit()
+                #exit()
             else:
                 rank = 0
                 smallest_rank = 0
@@ -2188,7 +2130,7 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         mpi_comm = getattr(self, "mpi_communicator", None)
       
         if mpi_comm is not None:
-            pids = mpi_comm.alltoall([my_pid])
+            pids = mpi_comm.alltoall([my_pid]*mpi_comm.Get_size())
         else:
             pids = [my_pid]
         pids = sorted(set(pids))
@@ -2198,7 +2140,7 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         # (Ideally, this would make use of the tuning results of similar kernels to
         # inform the Bayesian transformation space, but this is not currently implemented.)
         # Should probably be handled by the tuner in any case.
-
+        
         files = sorted([dirname + "/prefeinsum_" + pid + ".pickle" for pid in pids])
         for f in files:
             assert os.path.exists(os.path.normpath(f)), f"{f} does not exist"
