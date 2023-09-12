@@ -2099,7 +2099,6 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
             ### End new code        
         #exit()
         """
-        print("ALSO PID", unique_program_id(t_unit, attempt_normalization=False))
 
         return t_unit
 
@@ -2124,7 +2123,6 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         t_unit = super().transform_loopy_program(t_unit)
         from tagtune.utils import unique_program_id
         my_pid = unique_program_id(t_unit)
-        print("ALSO ALSO PID", my_pid)
 
         # Generate the PID of this processes' macrokernel and share with all processes
         mpi_comm = getattr(self, "mpi_communicator", None)
