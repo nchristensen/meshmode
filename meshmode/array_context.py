@@ -1921,6 +1921,33 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
         # from loopy.transform.instruction import simplify_indices
         # t_unit = simplify_indices(t_unit)
 
+        # {{{ fallback: if the inames are not inferred which mesh entity they
+        # iterate over.
+
+        # Should probably raise an exception and handle this elsewhere.
+        knl = t_unit.default_entrypoint
+        for iname in knl.all_inames():
+            if not knl.iname_tags_of_type(iname, DiscretizationEntityAxisTag):
+                warn(f"[{knl.name}]: Falling back to a slower transformation"
+                     " strategy as some loops are uninferred which mesh entity"
+                     " they belong to.",
+                     stacklevel=2)
+
+                return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_t_unit)
+
+        for insn in knl.instructions:
+            for assignee in insn.assignee_var_names():
+                var = knl.get_var_descriptor(assignee)
+                if not var.tags_of_type(FEMEinsumTag):
+                    warn(f"[{knl.name}]: Falling back to a slower transformation"
+                         " strategy as some instructions couldn't be inferred as"
+                         " einsums",
+                         stacklevel=2)
+
+                    return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_t_unit)
+
+        # }}}
+
         t_unit = super().transform_loopy_program(t_unit)
 
         knl = t_unit.default_entrypoint
@@ -2113,6 +2140,34 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         import loopy as lp
         original_tunit = t_unit
 
+        knl = t_unit.default_entrypoint
+        logger.info(f"Transforming kernel '{knl.name}' with {len(knl.instructions)} statements.")
+
+        # {{{ fallback: if the inames are not inferred which mesh entity they
+        # iterate over.
+
+        for iname in knl.all_inames():
+            if not knl.iname_tags_of_type(iname, DiscretizationEntityAxisTag):
+                warn(f"[{knl.name}]: Falling back to a slower transformation"
+                     " strategy as some loops are uninferred which mesh entity"
+                     " they belong to.",
+                     stacklevel=2)
+
+                return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_t_unit)
+
+        for insn in knl.instructions:
+            for assignee in insn.assignee_var_names():
+                var = knl.get_var_descriptor(assignee)
+                if not var.tags_of_type(FEMEinsumTag):
+                    warn(f"[{knl.name}]: Falling back to a slower transformation"
+                         " strategy as some instructions couldn't be inferred as"
+                         " einsums",
+                         stacklevel=2)
+
+                    return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_t_unit)
+
+        # }}}
+
         import os
         dirname = "./pickled_programs"
         os.makedirs(os.path.dirname(dirname), exist_ok=True)
@@ -2120,6 +2175,10 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         # Dump out the macro-kernel of this process
         # (Currently using the disk to communicate the pickled
         # macrokernels)
+
+
+
+
         t_unit = super().transform_loopy_program(t_unit)
         from tagtune.utils import unique_program_id
         my_pid = unique_program_id(t_unit)
@@ -2128,11 +2187,14 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         mpi_comm = getattr(self, "mpi_communicator", None)
       
         if mpi_comm is not None:
-            pids = mpi_comm.alltoall([my_pid]*mpi_comm.Get_size())
+            rank = mpi_comm.Get_rank()
+            local_haves = [(rank, my_pid,)]*mpi_comm.Get_size()
+            global_haves = mpi_comm.alltoall(local_haves)
+            pids = [global_have[1] for global_have in global_haves]
         else:
             pids = [my_pid]
+        #print("PIDS", pids)
         pids = sorted(set(pids))
-        print(pids)
 
         # Tune/transform all of the macrokernels with these PIDs
         # (Ideally, this would make use of the tuning results of similar kernels to
@@ -2173,6 +2235,37 @@ class FusionContractorArrayContext(FusionContractorArrayContextBase):
 
         # from loopy.transform.instruction import simplify_indices
         # t_unit = simplify_indices(t_unit)
+
+        knl = t_unit.default_entrypoint
+
+        logger.info(f"Transforming kernel '{knl.name}' with {len(knl.instructions)} statements.")
+
+        # {{{ fallback: if the inames are not inferred which mesh entity they
+        # iterate over.
+
+        for iname in knl.all_inames():
+            if not knl.iname_tags_of_type(iname, DiscretizationEntityAxisTag):
+                warn(f"[{knl.name}]: Falling back to a slower transformation"
+                     " strategy as some loops are uninferred which mesh entity"
+                     " they belong to.",
+                     stacklevel=2)
+
+                return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_t_unit)
+
+        for insn in knl.instructions:
+            for assignee in insn.assignee_var_names():
+                var = knl.get_var_descriptor(assignee)
+                if not var.tags_of_type(FEMEinsumTag):
+                    warn(f"[{knl.name}]: Falling back to a slower transformation"
+                         " strategy as some instructions couldn't be inferred as"
+                         " einsums",
+                         stacklevel=2)
+
+                    return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_t_unit)
+
+        # }}}
+
+
 
         t_unit = super().transform_loopy_program(t_unit)
 
@@ -2302,6 +2395,8 @@ class PrefusedFusionContractorArrayContext(FusionContractorArrayContextBase):
         try:
             iel_to_idofs = _get_iel_to_idofs(t_unit.default_entrypoint)
         except NotImplementedError as err:
+            return original_t_unit
+            """
             if t_unit.default_entrypoint.tags_of_type(FromArrayContextCompile):
                 raise err
             else:
@@ -2311,6 +2406,7 @@ class PrefusedFusionContractorArrayContext(FusionContractorArrayContextBase):
                      " transformation strategy.")
                 # Call grandparent transform_loopy_program
                 return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_t_unit)
+            """
         # }}}
 
 
