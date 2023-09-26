@@ -1916,6 +1916,14 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
         from functools import reduce
         from arraycontext.impl.pytato.compile import FromArrayContextCompile
 
+        from tagtune.utils import unique_program_id
+        
+        pid = unique_program_id(t_unit, attempt_normalization=False)
+        norm_pid = unique_program_id(t_unit, attempt_normalization=True)
+
+        print("===========PID===========")
+        print(pid)
+
         original_t_unit = t_unit
 
         # from loopy.transform.instruction import simplify_indices
@@ -2004,13 +2012,6 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
         from os.path import exists
         import pickle
 
-        from tagtune.utils import unique_program_id
-        
-        pid = unique_program_id(t_unit, attempt_normalization=False)
-        norm_pid = unique_program_id(t_unit, attempt_normalization=True)
-
-        print("===========PID===========")
-        print(pid)
 
         map_to_pid = None
         """
@@ -2051,7 +2052,6 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
                 local_have = [(rank, pid,)]*mpi_comm.Get_size()
                 global_have = mpi_comm.alltoall(local_have)
                 global_have = np.array(global_have)
-
                 smallest_rank = int(np.sort(global_have[global_have[:,1] == pid, :], axis=0)[0,0])
                 print("Sorted and downselected pids")
                 print(np.sort(global_have[global_have[:,1] == pid, :], axis=0))
@@ -2084,6 +2084,8 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
                 #print("Loaded tunit")
                 #print(loaded["tunit"])
 
+            if mpi_comm is not None:
+                mpi_comm.Barrier()
 
         """
         if not exists(call_count_path):
@@ -2176,12 +2178,10 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         # (Currently using the disk to communicate the pickled
         # macrokernels)
 
-
-
-
-        t_unit = super().transform_loopy_program(t_unit)
         from tagtune.utils import unique_program_id
         my_pid = unique_program_id(t_unit)
+        print("MY PID", my_pid)
+        t_unit = super().transform_loopy_program(t_unit)
 
         # Generate the PID of this processes' macrokernel and share with all processes
         mpi_comm = getattr(self, "mpi_communicator", None)
@@ -2193,7 +2193,7 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
             pids = [global_have[1] for global_have in global_haves]
         else:
             pids = [my_pid]
-        #print("PIDS", pids)
+        print("PIDS", pids)
         pids = sorted(set(pids))
 
         # Tune/transform all of the macrokernels with these PIDs
