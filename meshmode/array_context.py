@@ -2222,6 +2222,154 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         return return_tunit
 
        
+class KernelDumpingFusionContractorArrayContext(KernelDumpingFusionContractorArrayContextBase):
+
+    def transform_loopy_program(self, t_unit):
+        import loopy as lp
+        from functools import reduce
+        from arraycontext.impl.pytato.compile import FromArrayContextCompile
+
+        original_t_unit = t_unit
+
+        # from loopy.transform.instruction import simplify_indices
+        # t_unit = simplify_indices(t_unit)
+
+        knl = t_unit.default_entrypoint
+
+        logger.info(f"Transforming kernel '{knl.name}' with {len(knl.instructions)} statements.")
+
+        # {{{ fallback: if the inames are not inferred which mesh entity they
+        # iterate over.
+
+        for iname in knl.all_inames():
+            if not knl.iname_tags_of_type(iname, DiscretizationEntityAxisTag):
+                warn(f"[{knl.name}]: Falling back to a slower transformation"
+                     " strategy as some loops are uninferred which mesh entity"
+                     " they belong to.",
+                     stacklevel=2)
+
+                return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_t_unit)
+
+        for insn in knl.instructions:
+            for assignee in insn.assignee_var_names():
+                var = knl.get_var_descriptor(assignee)
+                if not var.tags_of_type(FEMEinsumTag):
+                    warn(f"[{knl.name}]: Falling back to a slower transformation"
+                         " strategy as some instructions couldn't be inferred as"
+                         " einsums",
+                         stacklevel=2)
+
+                    return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_t_unit)
+
+        # }}}
+
+
+
+        t_unit = super().transform_loopy_program(t_unit)
+
+        knl = t_unit.default_entrypoint
+
+        # {{{ check whether we can parallelize the kernel
+
+        try:
+            iel_to_idofs = _get_iel_to_idofs(knl)
+        except NotImplementedError as err:
+            if knl.tags_of_type(FromArrayContextCompile):
+                raise err
+            else:
+                warn(f"[{knl.name}]: FusionContractorArrayContext."
+                     "transform_loopy_program not broad enough (yet)."
+                     " Falling back to a possibly slower"
+                     " transformation strategy.")
+                return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_t_unit)
+
+        # }}}
+
+
+        # {{{ insert barriers between consecutive iel-loops
+
+        toposorted_iels = _get_element_loop_topo_sorted_order(knl)
+
+        for iel_pred, iel_succ in zip(toposorted_iels[:-1],
+                                      toposorted_iels[1:]):
+            knl = lp.add_barrier(knl,
+                                 insn_before=f"iname:{iel_pred}",
+                                 insn_after=f"iname:{iel_succ}")
+
+        # }}}
+
+        #print(knl)
+        t_unit = _alias_global_temporaries(original_t_unit)
+        t_unit = t_unit.with_kernel(knl)
+        del knl
+
+
+        # {{{ Parallelization strategy: Use feinsum
+
+
+        if False and t_unit.default_entrypoint.tags_of_type(FromArrayContextCompile):
+            # FIXME: Enable this branch, WIP for now and hence disabled it.
+            from loopy.match import ObjTagged
+            import feinsum as fnsm
+            from meshmode.feinsum_transformations import FEINSUM_TO_TRANSFORMS
+
+            assert all(insn.tags_of_type(EinsumTag)
+                       for insn in t_unit.default_entrypoint.instructions
+                       if isinstance(insn, lp.MultiAssignmentBase)
+                       )
+
+            einsum_tags = reduce(
+                frozenset.union,
+                (insn.tags_of_type(EinsumTag)
+                 for insn in t_unit.default_entrypoint.instructions),
+                frozenset())
+            for ensm_tag in sorted(einsum_tags,
+                                   key=lambda x: sorted(x.orig_loop_nest)):
+                if reduce(frozenset.union,
+                          (insn.reduction_inames()
+                           for insn in (t_unit.default_entrypoint.instructions)
+                           if ensm_tag in insn.tags),
+                          frozenset()):
+                    fused_einsum = fnsm.match_einsum(t_unit, ObjTagged(ensm_tag))
+                else:
+                    # elementwise loop
+                    fused_einsum = _get_elementwise_einsum(t_unit, ensm_tag)
+
+                try:
+                    fnsm_transform = FEINSUM_TO_TRANSFORMS[
+                        fnsm.normalize_einsum(fused_einsum)]
+                except KeyError:
+                    fnsm.query(fused_einsum,
+                               self.queue.context,
+                               err_if_no_results=True)
+                    1/0
+
+                t_unit = fnsm_transform(t_unit,
+                                        insn_match=ObjTagged(ensm_tag))
+        else:
+            knl = t_unit.default_entrypoint
+            for iel, idofs in sorted(iel_to_idofs.items()):
+                if idofs:
+                    nunit_dofs = {knl.get_constant_iname_length(idof)
+                                  for idof in idofs}
+                    idof, = idofs
+
+                    l_one_size, l_zero_size = _get_group_size_for_dof_array_loop(
+                        nunit_dofs)
+
+                    knl = lp.split_iname(knl, iel, l_one_size,
+                                         inner_tag="l.1", outer_tag="g.0")
+                    knl = lp.split_iname(knl, idof, l_zero_size,
+                                         inner_tag="l.0", outer_tag="unr")
+                else:
+                    knl = lp.split_iname(knl, iel, 32,
+                                         outer_tag="g.0", inner_tag="l.0")
+
+            t_unit = t_unit.with_kernel(knl)
+
+        # }}}
+
+        return t_unit
 
 
 class FusionContractorArrayContext(FusionContractorArrayContextBase):
