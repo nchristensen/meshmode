@@ -1978,6 +1978,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
             # }}}
 
             #print(knl)
+            print("ALIASING GLOBAL TEMPORARIES")
             t_unit = _alias_global_temporaries(original_t_unit)
             t_unit = t_unit.with_kernel(knl)
             del knl
@@ -2033,7 +2034,6 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
         # Doesn't actually create a directory on Crusher.
         os.makedirs(os.path.dirname(filename), exist_ok=True)
 
-        file_path = f"{filename}/prefeinsum_{pid}.pickle"
         #call_count_path = f"{filename}/call_count_{rank}.pickle"
         from frozendict import frozendict
 
@@ -2043,12 +2043,17 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
         #    print(instr.tags)
         #exit()
 
+        logger.info("DUMPING PICKLES")
+        mpi_comm = getattr(self, "mpi_communicator", None)
+
+        
 
         if not exists(file_path):
 
-            mpi_comm = getattr(self, "mpi_communicator", None)
             if mpi_comm is not None:
                 rank = mpi_comm.Get_rank()
+                file_path = f"{filename}/prefeinsum_{pid}_{rank}.pickle"
+                """
                 local_have = [(rank, pid,)]*mpi_comm.Get_size()
                 global_have = mpi_comm.alltoall(local_have)
                 global_have = np.array(global_have)
@@ -2056,37 +2061,45 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
                 print("Sorted and downselected pids")
                 print(np.sort(global_have[global_have[:,1] == pid, :], axis=0))
                 #exit()
+                """
             else:
+                """
                 rank = 0
                 smallest_rank = 0
+                """
+                file_path = f"{filename}/prefeinsum_{pid}_0.pickle"
 
             # Only the smallest rank with this pid should write to disk.
-            if smallest_rank == rank:
+            #if smallest_rank == rank:
 
-                out_file = open(file_path, "wb")
-                # Arguments may actually not be needed...
-                arguments = [] # The arguments aren't passed into
-                #for entry in bound_arguments.items():
-                #    if np.issubdtype(entry[1].dtype, np.integer):
-                #        arguments.append((entry[0], entry[1].get(),))
-                out_dict = frozendict({"tunit": t_unit,
-                                        "args": tuple(arguments), 
-                                        "map_to_pid": map_to_pid, 
-                                        "normalized_pid": norm_pid})
-                pickle.dump(out_dict, out_file)
-                #pickle.dump((t_unit, tuple(arguments),), out_file)
-                #pickle.dump(t_unit, out_file)
+            out_file = open(file_path, "wb")
+            
 
-                out_file.close()
+            # Arguments may actually not be needed...
+            arguments = [] # The arguments aren't passed into
+            #for entry in bound_arguments.items():
+            #    if np.issubdtype(entry[1].dtype, np.integer):
+            #        arguments.append((entry[0], entry[1].get(),))
+            out_dict = frozendict({"tunit": t_unit,
+                                    "args": tuple(arguments), 
+                                    "map_to_pid": map_to_pid, 
+                                    "normalized_pid": norm_pid})
+            pickle.dump(out_dict, out_file)
+            #pickle.dump((t_unit, tuple(arguments),), out_file)
+            #pickle.dump(t_unit, out_file)
 
-                #in_file = open(file_path, "rb")
-                #loaded = pickle.load(in_file)
-                #print("Loaded tunit")
-                #print(loaded["tunit"])
+            out_file.close()
 
-            if mpi_comm is not None:
-                mpi_comm.Barrier()
+            #in_file = open(file_path, "rb")
+            #loaded = pickle.load(in_file)
+            #print("Loaded tunit")
+            #print(loaded["tunit"])
 
+        #logger.info("WAITING AT BARRIER")
+        #if mpi_comm is not None:
+        #    mpi_comm.Barrier()
+
+        logger.info("RETURNING TUNIT")
         """
         if not exists(call_count_path):
             call_counts = {}
@@ -2180,21 +2193,27 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
 
         from tagtune.utils import unique_program_id
         my_pid = unique_program_id(t_unit)
-        print("MY PID", my_pid)
+        logger.info(f"MY PID: {my_pid}")
         t_unit = super().transform_loopy_program(t_unit)
+        logger.info("Finished call to super") 
 
         # Generate the PID of this processes' macrokernel and share with all processes
         mpi_comm = getattr(self, "mpi_communicator", None)
-      
+        rank = mpi_comm.Get_rank()
+        logger.info(f"My rank is {rank}")
+
         if mpi_comm is not None:
             rank = mpi_comm.Get_rank()
             local_haves = [(rank, my_pid,)]*mpi_comm.Get_size()
+            logger.info("BEFORE all to all")
             global_haves = mpi_comm.alltoall(local_haves)
+            logger.info("AFTER all to all")
             pids = [global_have[1] for global_have in global_haves]
         else:
             pids = [my_pid]
         print("PIDS", pids)
         pids = sorted(set(pids))
+        logger.info("Finished all to all")
 
         # Tune/transform all of the macrokernels with these PIDs
         # (Ideally, this would make use of the tuning results of similar kernels to
@@ -2210,6 +2229,7 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         p_tunit_dicts = get_pickled_tunits(files)
 
         return_tunit = None
+        logger.info("TUNING MACROKERNEL")
         for p_tunit_dict in p_tunit_dicts:
             # Tune each subkernel within each macrokernel in parallel
             # or just apply the transformations if tuning has already been done.
