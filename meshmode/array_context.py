@@ -2564,8 +2564,8 @@ class PrefusedFusionContractorArrayContext(FusionContractorArrayContextBase):
         try:
             iel_to_idofs = _get_iel_to_idofs(t_unit.default_entrypoint)
         except NotImplementedError as err:
-            return original_t_unit
-            """
+            #return original_t_unit
+            #"""
             if t_unit.default_entrypoint.tags_of_type(FromArrayContextCompile):
                 raise err
             else:
@@ -2575,7 +2575,7 @@ class PrefusedFusionContractorArrayContext(FusionContractorArrayContextBase):
                      " transformation strategy.")
                 # Call grandparent transform_loopy_program
                 return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_t_unit)
-            """
+            #"""
         # }}}
 
 
