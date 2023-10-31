@@ -1916,7 +1916,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
         from functools import reduce
         from arraycontext.impl.pytato.compile import FromArrayContextCompile
 
-        from tagtune.utils import unique_program_id
+        from feintune.utils import unique_program_id
         
         pid = unique_program_id(t_unit, attempt_normalization=False)
         norm_pid = unique_program_id(t_unit, attempt_normalization=True)
@@ -2191,7 +2191,7 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         # (Currently using the disk to communicate the pickled
         # macrokernels)
 
-        from tagtune.utils import unique_program_id
+        from feintune.utils import unique_program_id
         my_pid = unique_program_id(t_unit)
         logger.info(f"MY PID: {my_pid}")
         t_unit = super().transform_loopy_program(t_unit)
@@ -2224,7 +2224,7 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         for f in files:
             assert os.path.exists(os.path.normpath(f)), f"{f} does not exist"
 
-        from tagtune.test_fused_autotuning import get_pickled_tunits, transform_macrokernel
+        from feintune.test_fused_autotuning import get_pickled_tunits, transform_macrokernel
 
         p_tunit_dicts = get_pickled_tunits(files)
 
@@ -2569,7 +2569,7 @@ class PrefusedFusionContractorArrayContext(FusionContractorArrayContextBase):
             if t_unit.default_entrypoint.tags_of_type(FromArrayContextCompile):
                 raise err
             else:
-                warn(f"[{t_unit.default_entrypoint.name}]: FusionContractorArrayContext."
+                warn(f"[{t_unit.default_entrypoint.name}]: PrefusedFusionContractorArrayContext."
                      "transform_loopy_program not broad enough (yet)."
                      " Falling back to a possibly slower"
                      " transformation strategy.")
@@ -3025,7 +3025,7 @@ class KernelDumpingFusionContractorArrayContextOld(
         from functools import reduce
         from arraycontext.impl.pytato.compile import FromArrayContextCompile
 
-        from tagtune.utils import unique_program_id
+        from feintune.utils import unique_program_id
         
         pid = unique_program_id(t_unit, attempt_normalization=False)
         norm_pid = unique_program_id(t_unit, attempt_normalization=True)
