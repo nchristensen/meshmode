@@ -53,7 +53,7 @@ from meshmode.transform_metadata import (DiscretizationElementAxisTag,
                                          DiscretizationEntityAxisTag)
 from dataclasses import dataclass
 
-from pyrsistent import pmap
+from immutabledict import immutabledict
 logger = logging.getLogger(__name__)
 
 
@@ -949,7 +949,6 @@ class NotAnFEMEinsumError(ValueError):
 
 @memoize_on_first_arg
 def _get_redn_iname_to_insns(kernel):
-    from immutables import Map
     redn_iname_to_insns = {iname: set()
                            for iname in kernel.all_inames()}
 
@@ -957,7 +956,7 @@ def _get_redn_iname_to_insns(kernel):
         for redn_iname in insn.reduction_inames():
             redn_iname_to_insns[redn_iname].add(insn.id)
 
-    return Map({k: frozenset(v)
+    return immutabledict({k: frozenset(v)
                 for k, v in redn_iname_to_insns.items()})
 
 
@@ -1118,12 +1117,24 @@ def contract_arrays(knl, callables_table):
             # no one was reading 'temp' i.e. dead code got eliminated :)
             assert f"{temp}_subst" not in knl.substitutions
             continue
-        knl = precompute_for_single_kernel(
-            knl, callables_table, f"{temp}_subst",
-            sweep_inames=(),
-            temporary_address_space=lp.AddressSpace.PRIVATE,
-            compute_insn_id=f"_mm_contract_{temp}",
-        )
+        try:
+            knl = precompute_for_single_kernel(
+                knl, callables_table, f"{temp}_subst",
+                sweep_inames=(),
+                temporary_address_space=lp.AddressSpace.PRIVATE,
+                compute_insn_id=f"_mm_contract_{temp}",
+                _enable_mirgecom_workaround=True,
+            )
+        except TypeError as e:
+            if "_enable_mirgecom_workaround" in str(e):
+                knl = precompute_for_single_kernel(
+                    knl, callables_table, f"{temp}_subst",
+                    sweep_inames=(),
+                    temporary_address_space=lp.AddressSpace.PRIVATE,
+                    compute_insn_id=f"_mm_contract_{temp}",
+                )
+            else:
+                raise
 
         knl = lp.map_instructions(knl,
                                   f"id:_mm_contract_{temp}",
@@ -1214,6 +1225,9 @@ def _get_iel_to_idofs(kernel):
                    for dof_insn in kernel.iname_to_insns()[idof]):
                 pass
             else:
+                for dof_insn in kernel.iname_to_insns()[idof]:
+                    if iel not in kernel.id_to_insn[dof_insn].within_inames:
+                        print(f"_get_iel_to_idofs: {str(kernel.id_to_insn[dof_insn])=}")
                 raise NotImplementedError("The <iel,idof> loop "
                                           f"'{insn.within_inames}' has the idof-loop"
                                           " that's not nested within the iel-loop.")
@@ -1233,10 +1247,11 @@ def _get_iel_to_idofs(kernel):
                 raise NotImplementedError("Could not fit into  <iel,idof,iface>"
                                           " loop nest pattern.")
         else:
+            print(f"_get_iel_to_idofs: {str(insn)=}")
             raise NotImplementedError(f"Cannot fit loop nest '{insn.within_inames}'"
                                       " into known set of loop-nest patterns.")
 
-    return pmap({iel: frozenset(idofs)
+    return immutabledict({iel: frozenset(idofs)
                  for iel, idofs in iel_to_idofs.items()})
 
 
