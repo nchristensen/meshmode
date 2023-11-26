@@ -331,7 +331,7 @@ class PyOpenCLArrayContext(PyOpenCLArrayContextBase):
         filename = "./pickled_programs"
         file_path = f"{filename}/prefeinsum_{pid}_{rank}.pickle"
         call_count_path = f"{filename}/call_count_{rank}.pickle"
-        from frozendict import frozendict
+        from immutabledict import immutabledict
 
         if not exists(file_path):
             os.makedirs(os.path.dirname(filename), exist_ok=True)
@@ -344,7 +344,7 @@ class PyOpenCLArrayContext(PyOpenCLArrayContextBase):
 
             # In eager mode, the einsum tags aren't added, but the tuner still needs the tags
             # so add them here.
-            out_dict = frozendict({"tunit": t_unit,
+            out_dict = immutabledict({"tunit": t_unit,
                                     "args": tuple(arguments), 
                                     "map_to_pid": map_to_pid, 
                                     "normalized_pid":norm_pid})
@@ -373,7 +373,7 @@ class PyOpenCLArrayContext(PyOpenCLArrayContextBase):
             call_counts[pid] = 1
 
         call_count_file = open(call_count_path, "wb")
-        pickle.dump(frozendict(call_counts), call_count_file)
+        pickle.dump(immutabledict(call_counts), call_count_file)
         call_count_file.close()
 
         """
@@ -381,7 +381,7 @@ class PyOpenCLArrayContext(PyOpenCLArrayContextBase):
             in_file = open(file_path, "rb")
             arguments = [] # The arguments aren't passed into
             dic = pickle.load(in_file)
-            out_dict = frozendict({"tunit": t_unit, 
+            out_dict = immutabledict({"tunit": t_unit, 
                                    "args": tuple(arguments), 
                                    "map_to_pid": map_to_pid, 
                                    "calls": dic["calls"] + 1,
@@ -2013,7 +2013,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
             os.makedirs(os.path.dirname(filename), exist_ok=True)
 
             #call_count_path = f"{filename}/call_count_{rank}.pickle"
-            from frozendict import frozendict
+            from immutabledict import immutabledict
 
             #print(t_unit.default_entrypoint)
             #print("PRINTING INSTRUCTION TAGS")
@@ -2056,7 +2056,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
                 #for entry in bound_arguments.items():
                 #    if np.issubdtype(entry[1].dtype, np.integer):
                 #        arguments.append((entry[0], entry[1].get(),))
-                out_dict = frozendict({"tunit": t_unit,
+                out_dict = immutabledict({"tunit": t_unit,
                                         "args": tuple(arguments), 
                                         "map_to_pid": map_to_pid, 
                                         "normalized_pid": norm_pid})
@@ -2129,7 +2129,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
             call_counts[pid] = 1
 
         call_count_file = open(call_count_path, "wb")
-        pickle.dump(frozendict(call_counts), call_count_file)
+        pickle.dump(immutabledict(call_counts), call_count_file)
         call_count_file.close()
         """
 
@@ -2138,7 +2138,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
             in_file = open(file_path, "rb")
             arguments = [] # The arguments aren't passed into
             dic = pickle.load(in_file)
-            out_dict = frozendict({"tunit": t_unit, 
+            out_dict = immutabledict({"tunit": t_unit, 
                                    "args": tuple(arguments), 
                                    "map_to_pid": map_to_pid, 
                                    "calls": dic["calls"] + 1,
@@ -3212,7 +3212,7 @@ class KernelDumpingFusionContractorArrayContextOld(
             os.makedirs(os.path.dirname(filename), exist_ok=True)
 
             #call_count_path = f"{filename}/call_count_{rank}.pickle"
-            from frozendict import frozendict
+            from immutabledict import immutabledict
 
             #print(t_unit.default_entrypoint)
             #print("PRINTING INSTRUCTION TAGS")
@@ -3255,7 +3255,7 @@ class KernelDumpingFusionContractorArrayContextOld(
                 #for entry in bound_arguments.items():
                 #    if np.issubdtype(entry[1].dtype, np.integer):
                 #        arguments.append((entry[0], entry[1].get(),))
-                out_dict = frozendict({"tunit": t_unit,
+                out_dict = immutabledict({"tunit": t_unit,
                                         "args": tuple(arguments), 
                                         "map_to_pid": map_to_pid, 
                                         "normalized_pid": norm_pid})
@@ -3404,7 +3404,7 @@ class KernelDumpingFusionContractorArrayContextOld(
         filename = "./pickled_programs"
         file_path = f"{filename}/prefeinsum_{pid}_{rank}.pickle"
         call_count_path = f"{filename}/call_count_{rank}.pickle"
-        from frozendict import frozendict
+        from immutabledict import immutabledict
 
         #print(t_unit.default_entrypoint)
         #print("PRINTING INSTRUCTION TAGS")
@@ -3420,7 +3420,7 @@ class KernelDumpingFusionContractorArrayContextOld(
             #for entry in bound_arguments.items():
             #    if np.issubdtype(entry[1].dtype, np.integer):
             #        arguments.append((entry[0], entry[1].get(),))
-            out_dict = frozendict({"tunit": t_unit,
+            out_dict = immutabledict({"tunit": t_unit,
                                     "args": tuple(arguments), 
                                     "map_to_pid": map_to_pid, 
                                     "normalized_pid":norm_pid})
@@ -3449,7 +3449,7 @@ class KernelDumpingFusionContractorArrayContextOld(
             call_counts[pid] = 1
 
         call_count_file = open(call_count_path, "wb")
-        pickle.dump(frozendict(call_counts), call_count_file)
+        pickle.dump(immutabledict(call_counts), call_count_file)
         call_count_file.close()
 
         """
@@ -3457,7 +3457,7 @@ class KernelDumpingFusionContractorArrayContextOld(
             in_file = open(file_path, "rb")
             arguments = [] # The arguments aren't passed into
             dic = pickle.load(in_file)
-            out_dict = frozendict({"tunit": t_unit, 
+            out_dict = immutabledict({"tunit": t_unit, 
                                    "args": tuple(arguments), 
                                    "map_to_pid": map_to_pid, 
                                    "calls": dic["calls"] + 1,
@@ -4185,7 +4185,7 @@ class FusionContractorArrayContextOld(
         filename = "./pickled_programs"
         file_path = f"{filename}/prefeinsum_{pid}_{rank}.pickle"
         call_count_path = f"{filename}/call_count_{rank}.pickle"
-        from frozendict import frozendict
+        from immutabledict import immutabledict
 
         #print(t_unit.default_entrypoint)
         #print("PRINTING INSTRUCTION TAGS")
@@ -4201,7 +4201,7 @@ class FusionContractorArrayContextOld(
             #for entry in bound_arguments.items():
             #    if np.issubdtype(entry[1].dtype, np.integer):
             #        arguments.append((entry[0], entry[1].get(),))
-            out_dict = frozendict({"tunit": t_unit,
+            out_dict = immutabledict({"tunit": t_unit,
                                     "args": tuple(arguments), 
                                     "map_to_pid": map_to_pid, 
                                     "normalized_pid":norm_pid})
@@ -4230,7 +4230,7 @@ class FusionContractorArrayContextOld(
             call_counts[pid] = 1
 
         call_count_file = open(call_count_path, "wb")
-        pickle.dump(frozendict(call_counts), call_count_file)
+        pickle.dump(immutabledict(call_counts), call_count_file)
         call_count_file.close()
 
         """
@@ -4238,7 +4238,7 @@ class FusionContractorArrayContextOld(
             in_file = open(file_path, "rb")
             arguments = [] # The arguments aren't passed into
             dic = pickle.load(in_file)
-            out_dict = frozendict({"tunit": t_unit, 
+            out_dict = immutabledict({"tunit": t_unit, 
                                    "args": tuple(arguments), 
                                    "map_to_pid": map_to_pid, 
                                    "calls": dic["calls"] + 1,
@@ -4594,7 +4594,7 @@ class PrefusedFusionContractorArrayContextOld(FusionContractorArrayContextBase):
         filename = "./pickled_programs"
         file_path = f"{filename}/prefeinsum_{pid}_{rank}.pickle"
         call_count_path = f"{filename}/call_count_{rank}.pickle"
-        from frozendict import frozendict
+        from immutabledict import immutabledict
 
         #print(t_unit.default_entrypoint)
         #print("PRINTING INSTRUCTION TAGS")
@@ -4610,7 +4610,7 @@ class PrefusedFusionContractorArrayContextOld(FusionContractorArrayContextBase):
             #for entry in bound_arguments.items():
             #    if np.issubdtype(entry[1].dtype, np.integer):
             #        arguments.append((entry[0], entry[1].get(),))
-            out_dict = frozendict({"tunit": t_unit,
+            out_dict = immutabledict({"tunit": t_unit,
                                     "args": tuple(arguments), 
                                     "map_to_pid": map_to_pid, 
                                     "normalized_pid":norm_pid})
@@ -4639,7 +4639,7 @@ class PrefusedFusionContractorArrayContextOld(FusionContractorArrayContextBase):
             call_counts[pid] = 1
 
         call_count_file = open(call_count_path, "wb")
-        pickle.dump(frozendict(call_counts), call_count_file)
+        pickle.dump(immutabledict(call_counts), call_count_file)
         call_count_file.close()
 
         """
@@ -4647,7 +4647,7 @@ class PrefusedFusionContractorArrayContextOld(FusionContractorArrayContextBase):
             in_file = open(file_path, "rb")
             arguments = [] # The arguments aren't passed into
             dic = pickle.load(in_file)
-            out_dict = frozendict({"tunit": t_unit, 
+            out_dict = immutabledict({"tunit": t_unit, 
                                    "args": tuple(arguments), 
                                    "map_to_pid": map_to_pid, 
                                    "calls": dic["calls"] + 1,
