@@ -2199,41 +2199,45 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
 
         # Generate the PID of this processes' macrokernel and share with all processes
         mpi_comm = getattr(self, "mpi_communicator", None)
-        rank = mpi_comm.Get_rank()
-        logger.info(f"My rank is {rank}")
-
+        #rank = mpi_comm.Get_rank()
+        #logger.info(f"My rank is {rank}")
         if mpi_comm is not None:
             rank = mpi_comm.Get_rank()
-            local_haves = [(rank, my_pid,)]*mpi_comm.Get_size()
-            logger.info("BEFORE all to all")
-            global_haves = mpi_comm.alltoall(local_haves)
-            logger.info("AFTER all to all")
-            pids = [global_have[1] for global_have in global_haves]
         else:
-            pids = [my_pid]
-        print("PIDS", pids)
-        pids = sorted(set(pids))
-        logger.info("Finished all to all")
+            rank = 0
+            #local_haves = [(rank, my_pid,)]*mpi_comm.Get_size()
+            #logger.info("BEFORE all to all")
+            #global_haves = mpi_comm.alltoall(local_haves)
+            #logger.info("AFTER all to all")
+            #pids = [global_have[1] for global_have in global_haves]
+        #else:
+        #    pids = [my_pid]
+        #print("PIDS", pids)
+        #pids = sorted(set(pids))
+        #logger.info("Finished all to all")
 
         # Tune/transform all of the macrokernels with these PIDs
         # (Ideally, this would make use of the tuning results of similar kernels to
         # inform the Bayesian transformation space, but this is not currently implemented.)
         # Should probably be handled by the tuner in any case.
-        
-        files = sorted([dirname + "/prefeinsum_" + pid + ".pickle" for pid in pids])
+        pids = [my_pid]
+        files = sorted([dirname + "/prefeinsum_" + pid + f"_{rank}.pickle" for pid in pids])
         for f in files:
             assert os.path.exists(os.path.normpath(f)), f"{f} does not exist"
 
-        from feintune.test_fused_autotuning import get_pickled_tunits, transform_macrokernel
+        from feintune.fused_autotuning import get_pickled_tunits, transform_macrokernel
 
         p_tunit_dicts = get_pickled_tunits(files)
 
         return_tunit = None
         logger.info("TUNING MACROKERNEL")
+
+        logger.info(len(p_tunit_dicts))
+
         for p_tunit_dict in p_tunit_dicts:
             # Tune each subkernel within each macrokernel in parallel
             # or just apply the transformations if tuning has already been done.
-            t_unit = transform_macrokernel(p_tunit_dict, "./autotuning_files")
+            t_unit, subkernels = transform_macrokernel(p_tunit_dict, "./autotuning_files")
             if my_pid in p_tunit_dict[0]:
                 return_tunit = t_unit
 
