@@ -2183,7 +2183,7 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
                      " they belong to.",
                      stacklevel=2)
 
-                return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_t_unit)
+                return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_tunit)
 
         for insn in knl.instructions:
             for assignee in insn.assignee_var_names():
@@ -2194,7 +2194,7 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
                          " einsums",
                          stacklevel=2)
 
-                    return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_t_unit)
+                    return super(FusionContractorArrayContextBase, self).transform_loopy_program(original_tunit)
 
         # }}}
 
