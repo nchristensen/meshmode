@@ -2580,9 +2580,12 @@ class PrefusedFusionContractorArrayContext(FusionContractorArrayContextBase):
 
         # {{{ check whether we can parallelize the kernel
 
-        try:
-            iel_to_idofs = _get_iel_to_idofs(t_unit.default_entrypoint)
-        except NotImplementedError as err:
+        iel_to_idofs = None
+        for tag in t_unit.default_entrypoint.tags:
+            if isinstance(tag, IeltoIdofsTag):
+                iel_to_idofs = tag.iel_to_idofs
+
+        if iel_to_idofs is None:
             #return original_t_unit
             #"""
             if t_unit.default_entrypoint.tags_of_type(FromArrayContextCompile):
@@ -2665,6 +2668,12 @@ class PrefusedFusionContractorArrayContext(FusionContractorArrayContextBase):
 
         return t_unit
 
+from typing import Optional
+from pytools.tag import tag_dataclass
+
+@tag_dataclass
+class IeltoIdofsTag(UniqueTag):
+    iel_to_idofs: Optional[object] = None
 
 class KernelDumpingFusionContractorArrayContextOld(
         SingleGridWorkBalancingPytatoArrayContext):
@@ -3282,6 +3291,7 @@ class KernelDumpingFusionContractorArrayContextOld(
                      "transform_loopy_program not broad enough (yet)."
                      " Falling back to a possibly slower"
                      " transformation strategy.")
+                original_t_unit = original_t_unit.with_kernel(original_t_unit.default_entrypoint.tagged(IeltoIdofsTag()))
                 dump_tunit(original_t_unit)
                 return super().transform_loopy_program(original_t_unit)
 
@@ -3297,12 +3307,14 @@ class KernelDumpingFusionContractorArrayContextOld(
                                  insn_before=f"iname:{iel_pred}",
                                  insn_after=f"iname:{iel_succ}")
 
-        # }}}
+        # }}} 
 
         #print(knl)
         t_unit = _alias_global_temporaries(t_unit)
 
         t_unit = t_unit.with_kernel(knl)
+        from pyrsistent import pmap
+        t_unit = t_unit.with_kernel(t_unit.default_entrypoint.tagged(IeltoIdofsTag(iel_to_idofs=pmap(iel_to_idofs))))
         dump_tunit(t_unit)
         del knl
 
@@ -3542,7 +3554,7 @@ class KernelDumpingFusionContractorArrayContextOld(
 
             t_unit = t_unit.with_kernel(knl)
 
-        # }}}
+        # }}} 
 
         return t_unit
 
