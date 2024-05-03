@@ -2589,7 +2589,8 @@ class PrefusedFusionContractorArrayContext(FusionContractorArrayContextBase):
             #return original_t_unit
             #"""
             if t_unit.default_entrypoint.tags_of_type(FromArrayContextCompile):
-                raise err
+                #raise err
+                raise NotImplementedError
             else:
                 warn(f"[{t_unit.default_entrypoint.name}]: PrefusedFusionContractorArrayContext."
                      "transform_loopy_program not broad enough (yet)."
@@ -3284,9 +3285,9 @@ class KernelDumpingFusionContractorArrayContextOld(
         try:
             iel_to_idofs = _get_iel_to_idofs(knl)
         except NotImplementedError as err:
-            if knl.tags_of_type(FromArrayContextCompile):
-                raise err
-            else:
+            #if knl.tags_of_type(FromArrayContextCompile):
+            #    raise err
+            #else:
                 warn(f"[{knl.name}]: FusionContractorArrayContext."
                      "transform_loopy_program not broad enough (yet)."
                      " Falling back to a possibly slower"
