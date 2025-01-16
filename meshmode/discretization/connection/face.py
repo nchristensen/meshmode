@@ -20,14 +20,21 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import logging
 from dataclasses import dataclass
-from meshmode.transform_metadata import DiscretizationElementAxisTag
-from arraycontext.metadata import NameHint
 
 import numpy as np
-import modepy as mp
 
-import logging
+import modepy as mp
+from arraycontext import ArrayContext
+from arraycontext.metadata import NameHint
+
+from meshmode.discretization import Discretization, ElementGroupFactory
+from meshmode.discretization.connection.direct import DirectDiscretizationConnection
+from meshmode.mesh import BoundaryTag, Mesh
+from meshmode.transform_metadata import DiscretizationElementAxisTag
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -64,9 +71,10 @@ class _ConnectionBatchData:
 def _build_boundary_connection(actx, vol_discr, bdry_discr, connection_data,
         per_face_groups):
     from meshmode.discretization.connection.direct import (
-            InterpolationBatch,
-            DiscretizationConnectionElementGroup,
-            DirectDiscretizationConnection)
+        DirectDiscretizationConnection,
+        DiscretizationConnectionElementGroup,
+        InterpolationBatch,
+    )
 
     ibdry_grp = 0
     batches = []
@@ -112,11 +120,17 @@ def _build_boundary_connection(actx, vol_discr, bdry_discr, connection_data,
 
 # {{{ pull together boundary vertices
 
-def _get_face_vertices(mesh, boundary_tag):
+def _get_face_vertices(mesh: Mesh, boundary_tag: BoundaryTag) -> np.ndarray:
     # a set of volume vertex numbers
     bdry_vertex_vol_nrs = set()
 
-    if boundary_tag not in [FACE_RESTR_INTERIOR, FACE_RESTR_ALL]:
+    if boundary_tag in [FACE_RESTR_INTERIOR, FACE_RESTR_ALL]:
+        # For FACE_RESTR_INTERIOR, this is likely every vertex in the book.
+        # Don't ever bother trying to cut the list down.
+        # For FACE_RESTR_ALL, it literally is every single vertex.
+
+        return np.arange(mesh.nvertices, dtype=np.intp)
+    else:
         # {{{ boundary faces
 
         from meshmode.mesh import mesh_has_boundary
@@ -141,18 +155,17 @@ def _get_face_vertices(mesh, boundary_tag):
         return np.array(sorted(bdry_vertex_vol_nrs), dtype=np.intp)
 
         # }}}
-    else:
-        # For FACE_RESTR_INTERIOR, this is likely every vertex in the book.
-        # Don't ever bother trying to cut the list down.
-        # For FACE_RESTR_ALL, it literally is every single vertex.
-
-        return np.arange(mesh.nvertices, dtype=np.intp)
 
 # }}}
 
 
-def make_face_restriction(actx, discr, group_factory, boundary_tag,
-        per_face_groups=False):
+def make_face_restriction(
+            actx: ArrayContext,
+            discr: Discretization,
+            group_factory: ElementGroupFactory,
+            boundary_tag: BoundaryTag,
+            per_face_groups: bool | None = False
+        ) -> DirectDiscretizationConnection:
     """Create a mesh, a discretization and a connection to restrict
     a function on *discr* to its values on the edges of element faces
     denoted by *boundary_tag*.
@@ -183,15 +196,11 @@ def make_face_restriction(actx, discr, group_factory, boundary_tag,
         :attr:`meshmode.discretization.connection.DirectDiscretizationConnection.to_discr`
         attribute of the return value, and the corresponding new boundary mesh
         from that.
-
     """
 
     if boundary_tag is None:
-        boundary_tag = FACE_RESTR_INTERIOR
-        from warnings import warn
-        warn("passing *None* for boundary_tag is deprecated--pass "
-                "FACE_RESTR_INTERIOR instead",
-                DeprecationWarning, stacklevel=2)
+        raise ValueError("passing *None* for boundary_tag is no longer allowed--pass "
+                "FACE_RESTR_INTERIOR instead")
 
     if boundary_tag not in [FACE_RESTR_INTERIOR, FACE_RESTR_ALL]:
         from meshmode.mesh import mesh_has_boundary
@@ -199,6 +208,8 @@ def make_face_restriction(actx, discr, group_factory, boundary_tag,
             raise ValueError(f"invalid boundary tag {boundary_tag}.")
 
     logger.info("building face restriction: start")
+
+    assert discr.mesh.vertices is not None
 
     # {{{ gather boundary vertices
 
@@ -215,16 +226,16 @@ def make_face_restriction(actx, discr, group_factory, boundary_tag,
 
     # }}}
 
-    from meshmode.mesh import Mesh, _ModepyElementGroup
+    from meshmode.mesh import ModepyElementGroup, make_mesh
     bdry_mesh_groups = []
     connection_data = {}
 
     for igrp, (grp, fagrp_list) in enumerate(
-            zip(discr.groups, discr.mesh.facial_adjacency_groups)):
+            zip(discr.groups, discr.mesh.facial_adjacency_groups, strict=True)):
 
         mgrp = grp.mesh_el_group
 
-        if not isinstance(mgrp, _ModepyElementGroup):
+        if not isinstance(mgrp, ModepyElementGroup):
             raise NotImplementedError("can only take boundary of "
                     "meshes based on SimplexElementGroup and "
                     "TensorProductElementGroup")
@@ -240,7 +251,7 @@ def make_face_restriction(actx, discr, group_factory, boundary_tag,
                 if isinstance(fagrp, InteriorAdjacencyGroup)]
             for fagrp in int_grps:
                 group_boundary_faces.extend(
-                        zip(fagrp.elements, fagrp.element_faces))
+                        zip(fagrp.elements, fagrp.element_faces, strict=True))
 
         elif boundary_tag is FACE_RESTR_ALL:
             group_boundary_faces.extend(
@@ -259,7 +270,8 @@ def make_face_restriction(actx, discr, group_factory, boundary_tag,
                 group_boundary_faces.extend(
                             zip(
                                 bdry_grp.elements,
-                                bdry_grp.element_faces))
+                                bdry_grp.element_faces,
+                                strict=True))
 
         # }}}
 
@@ -289,7 +301,7 @@ def make_face_restriction(actx, discr, group_factory, boundary_tag,
                 bdry_unit_nodes = mp.edge_clustered_nodes_for_space(space, face)
 
                 vol_basis = mp.basis_for_space(
-                        mgrp._modepy_space, mgrp._modepy_shape).functions
+                        mgrp.space, mgrp.shape).functions
 
                 vertex_indices = np.empty(
                         (ngroup_bdry_elements, face.nvertices),
@@ -309,7 +321,7 @@ def make_face_restriction(actx, discr, group_factory, boundary_tag,
 
             face_unit_nodes = face.map_to_volume(bdry_unit_nodes)
             resampling_mat = mp.resampling_matrix(
-                    vol_basis,
+                    vol_basis,  # pylint: disable=possibly-used-before-assignment
                     face_unit_nodes, mgrp.unit_nodes)
 
             # }}}
@@ -319,11 +331,11 @@ def make_face_restriction(actx, discr, group_factory, boundary_tag,
             # Find vertex_indices
             glob_face_vertices = mgrp.vertex_indices[
                     batch_boundary_el_numbers_in_grp][:, face.volume_vertex_indices]
-            vertex_indices[new_el_numbers] = \
-                    vol_to_bdry_vertices[glob_face_vertices]
+            vertex_indices[new_el_numbers] = (  # pylint: disable=possibly-used-before-assignment
+                    vol_to_bdry_vertices[glob_face_vertices])
 
             # Find nodes
-            nodes[:, new_el_numbers, :] = np.einsum(
+            nodes[:, new_el_numbers, :] = np.einsum(  # pylint: disable=possibly-used-before-assignment
                     "ij,dej->dei",
                     resampling_mat,
                     mgrp.nodes[:, batch_boundary_el_numbers_in_grp, :])
@@ -344,7 +356,10 @@ def make_face_restriction(actx, discr, group_factory, boundary_tag,
                         unit_nodes=bdry_unit_nodes)
                 bdry_mesh_groups.append(bdry_mesh_group)
 
-    bdry_mesh = Mesh(bdry_vertices, bdry_mesh_groups)
+    bdry_mesh = make_mesh(
+        bdry_vertices, bdry_mesh_groups,
+        # Element orientation test doesn't work if dim != ambient_dim
+        skip_element_orientation_test=True)
 
     bdry_discr = discr.copy(
             actx=actx,
@@ -364,8 +379,12 @@ def make_face_restriction(actx, discr, group_factory, boundary_tag,
 
 # {{{ face -> all_faces connection
 
-def make_face_to_all_faces_embedding(actx, faces_connection, all_faces_discr,
-        from_discr=None):
+def make_face_to_all_faces_embedding(
+            actx: ArrayContext,
+            faces_connection: DirectDiscretizationConnection,
+            all_faces_discr: Discretization,
+            from_discr: Discretization | None = None
+        ) -> DirectDiscretizationConnection:
     """Return a
     :class:`meshmode.discretization.connection.DiscretizationConnection`
     connecting a discretization containing some faces of a discretization
@@ -406,9 +425,10 @@ def make_face_to_all_faces_embedding(actx, faces_connection, all_faces_discr,
                 "same number of groups")
 
     from meshmode.discretization.connection import (
-            DirectDiscretizationConnection,
-            DiscretizationConnectionElementGroup,
-            InterpolationBatch)
+        DirectDiscretizationConnection,
+        DiscretizationConnectionElementGroup,
+        InterpolationBatch,
+    )
 
     i_faces_grp = 0
 

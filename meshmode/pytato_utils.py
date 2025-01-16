@@ -36,12 +36,11 @@ class EagerReduceComputingPytatoFakeNumpyNamespace(PytatoFakeNumpyNamespace):
 
             def _pt_sum(ary):
                 return cl_array.sum(self._array_context.freeze(ary),
-                                 dtype=dtype,
-                                 queue=self._array_context.queue)
+                                    dtype=dtype,
+                                    queue=self._array_context.queue)
 
-            return self._array_context.thaw(rec_map_reduce_array_container(sum,
-                                                                           _pt_sum,
-                                                                           a))
+            return self._array_context.thaw(
+                rec_map_reduce_array_container(sum, _pt_sum, a))
         else:
             return super().sum(a, axis=axis, dtype=dtype)
 

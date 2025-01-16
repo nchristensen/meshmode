@@ -20,31 +20,32 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-from functools import partial
-from dataclasses import dataclass
 import logging
-logger = logging.getLogger(__name__)
+import pathlib
+from dataclasses import dataclass
+from functools import partial
 
 import numpy as np
-# import numpy.linalg as la
 import pytest
 
+from arraycontext import pytest_generate_tests_for_array_contexts
 from pytools.obj_array import make_obj_array
 
-from meshmode.mesh import SimplexElementGroup, TensorProductElementGroup
-from meshmode.discretization.poly_element import (
-        default_simplex_group_factory,
-        InterpolatoryQuadratureSimplexGroupFactory,
-        LegendreGaussLobattoTensorProductGroupFactory,
-        )
 import meshmode.mesh.generation as mgen
-
+from meshmode import _acf  # noqa: F401
 from meshmode.array_context import PytestPyOpenCLArrayContextFactory
-from arraycontext import pytest_generate_tests_for_array_contexts
+from meshmode.discretization.poly_element import (
+    InterpolatoryQuadratureSimplexGroupFactory,
+    LegendreGaussLobattoTensorProductGroupFactory,
+    default_simplex_group_factory,
+)
+from meshmode.mesh import SimplexElementGroup, TensorProductElementGroup
+
+
+logger = logging.getLogger(__name__)
 pytest_generate_tests = pytest_generate_tests_for_array_contexts(
         [PytestPyOpenCLArrayContextFactory])
 
-import pathlib
 thisdir = pathlib.Path(__file__).parent
 
 
@@ -84,10 +85,10 @@ def test_parallel_vtk_file(actx_factory, dim):
     vis = make_visualizer(actx, discr, target_order)
 
     class FakeComm:
-        def Get_rank(self):  # noqa: N802
+        def Get_rank(self):
             return 0
 
-        def Get_size(self):  # noqa: N802
+        def Get_size(self):
             return 2
 
     file_name_pattern = f"visualizer_vtk_linear_{dim}_{{rank}}.vtu"
@@ -323,9 +324,10 @@ def test_vtk_overwrite(actx_factory):
             actx, mesh,
             InterpolatoryQuadratureSimplexGroupFactory(target_order))
 
-    from meshmode.discretization.visualization import make_visualizer
-    from meshmode.discretization.visualization import \
-            write_nodal_adjacency_vtk_file
+    from meshmode.discretization.visualization import (
+        make_visualizer,
+        write_nodal_adjacency_vtk_file,
+    )
     from meshmode.mesh.visualization import write_vertex_vtk_file
 
     vis = make_visualizer(actx, discr, 1)

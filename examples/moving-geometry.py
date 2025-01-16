@@ -20,18 +20,18 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-from typing import Optional, Type
+import logging
 
 import numpy as np
+
 import pyopencl as cl
+from pytools import keyed_memoize_in
+from pytools.obj_array import make_obj_array
 
 from meshmode.array_context import PyOpenCLArrayContext
 from meshmode.transform_metadata import FirstAxisIsElementsTag
 
-from pytools import keyed_memoize_in
-from pytools.obj_array import make_obj_array
 
-import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -78,6 +78,8 @@ def reconstruct_discr_from_nodes(actx, discr, x):
                            discr_nodes,
                            tagged=(FirstAxisIsElementsTag(),))
 
+    from dataclasses import replace
+
     megs = []
     for igrp, grp in enumerate(discr.groups):
         nodes = np.stack([
@@ -85,10 +87,7 @@ def reconstruct_discr_from_nodes(actx, discr, x):
             for iaxis in range(discr.ambient_dim)
             ])
 
-        meg = grp.mesh_el_group.copy(
-                vertex_indices=None,
-                nodes=nodes,
-                )
+        meg = replace(grp.mesh_el_group, vertex_indices=None, nodes=nodes)
         megs.append(meg)
 
     mesh = discr.mesh.copy(groups=megs, vertices=None)
@@ -104,7 +103,7 @@ def advance(actx, dt, t, x, fn):
 
 def run(actx, *,
         ambient_dim: int = 3,
-        resolution: Optional[int] = None,
+        resolution: int | None = None,
         target_order: int = 4,
         tmax: float = 1.0,
         timestep: float = 1.0e-2,
@@ -121,13 +120,14 @@ def run(actx, *,
     # {{{ element groups
 
     import modepy as mp
+
     import meshmode.discretization.poly_element as poly
 
     # NOTE: picking the same unit nodes for the mesh and the discr saves
     # a bit of work when reconstructing after a time step
 
     if group_factory_name == "warp_and_blend":
-        group_factory_cls: Type[poly.HomogeneousOrderBasedGroupFactory] = (
+        group_factory_cls: type[poly.HomogeneousOrderBasedGroupFactory] = (
             poly.PolynomialWarpAndBlend2DRestrictingGroupFactory)
 
         unit_nodes = mp.warp_and_blend_nodes(ambient_dim - 1, mesh_order)
@@ -200,7 +200,8 @@ def run(actx, *,
         gradx = sum(
                 num_reference_derivative(discr, (i,), x)
                 for i in range(discr.dim))
-        intx = sum(actx.np.sum(xi * wi) for xi, wi in zip(x, discr.quad_weights()))
+        intx = sum(actx.np.sum(xi * wi)
+                   for xi, wi in zip(x, discr.quad_weights(), strict=True))
 
         assert gradx is not None
         assert intx is not None
@@ -244,7 +245,7 @@ def run(actx, *,
 if __name__ == "__main__":
     cl_ctx = cl.create_some_context()
     queue = cl.CommandQueue(cl_ctx)
-    actx = PyOpenCLArrayContext(queue)
+    actx = PyOpenCLArrayContext(queue, force_device_scalars=True)
 
     from pytools import ProcessTimer
     for _ in range(1):

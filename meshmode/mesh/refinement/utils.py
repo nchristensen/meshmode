@@ -22,19 +22,20 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import logging
 from abc import ABC, abstractmethod
 from functools import singledispatch
-from typing import Optional
 
 import numpy as np
 
 from meshmode.mesh import (
-        Mesh,
-        MeshElementGroup,
-        SimplexElementGroup,
-        TensorProductElementGroup)
+    Mesh,
+    MeshElementGroup,
+    SimplexElementGroup,
+    TensorProductElementGroup,
+)
 
-import logging
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,7 +59,7 @@ class Refiner(ABC):
     def get_current_mesh(self) -> Mesh:
         return self._current_mesh
 
-    def get_previous_mesh(self) -> Optional[Mesh]:
+    def get_previous_mesh(self) -> Mesh | None:
         return self._previous_mesh
 
     def refine_uniformly(self):

@@ -91,18 +91,19 @@ Python 3 Conda:
 
 Documentation:
   script:
-  - EXTRA_INSTALL="pybind11 cython numpy sphinxcontrib-tikz"
+  # https://github.com/sphinx-contrib/tikz/issues/21
+  - EXTRA_INSTALL="pybind11 cython numpy sphinxcontrib-tikz!=0.4.18"
   - curl -L -O https://gitlab.tiker.net/inducer/ci-support/raw/main/build-docs.sh
   - . ./build-docs.sh
   tags:
   - python3
 
-Flake8:
-  script:
-  - curl -L -O https://gitlab.tiker.net/inducer/ci-support/raw/main/prepare-and-run-flake8.sh
-  - . ./prepare-and-run-flake8.sh "$CI_PROJECT_NAME" test examples
+Ruff:
+  script: |
+    pipx install ruff
+    ruff check
   tags:
-  - python3
+  - docker-runner
   except:
   - tags
 

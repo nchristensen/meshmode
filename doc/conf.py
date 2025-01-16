@@ -1,4 +1,6 @@
+from importlib import metadata
 from urllib.request import urlopen
+
 
 _conf_url = \
         "https://raw.githubusercontent.com/inducer/sphinxconfig/main/sphinxconfig.py"
@@ -12,22 +14,15 @@ extensions.extend([  # noqa: F821
 
 tikz_tikzlibraries = "decorations.markings"
 
-copyright = "2014-21, Meshmode contributors"
-
-ver_dic = {}
-exec(
-        compile(
-            open("../meshmode/version.py").read(), "../meshmode/version.py", "exec"),
-        ver_dic)
-version = ".".join(str(x) for x in ver_dic["VERSION"])
-# The full version, including alpha/beta/rc tags.
-release = ver_dic["VERSION_TEXT"]
+copyright = "2014-2024, Meshmode contributors"
+release = metadata.version("meshmode")
+version = ".".join(release.split(".")[:2])
 
 intersphinx_mapping = {
     "arraycontext": ("https://documen.tician.de/arraycontext", None),
     "fenics": ("https://fenics.readthedocs.io/projects/fiat/en/latest", None),
     "FInAT": ("https://finat.github.io/FInAT/", None),
-    "firedrake": ("https://firedrakeproject.org", None),
+    "firedrake": ("https://www.firedrakeproject.org", None),
     "gmsh_interop": ("https://documen.tician.de/gmsh_interop", None),
     "h5py": ("https://docs.h5py.org/en/stable", None),
     "loopy": ("https://documen.tician.de/loopy", None),
@@ -53,5 +48,6 @@ intersphinx_mapping = {
 # this needs a setting of the same name across all packages involved, that's
 # why this name is as global-sounding as it is.
 import sys
+
 
 sys._BUILDING_SPHINX_DOCS = True

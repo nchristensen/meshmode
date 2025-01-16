@@ -24,11 +24,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import logging
+
 import numpy as np
 
 from meshmode.mesh.refinement.utils import Refiner
 
-import logging
+
 logger = logging.getLogger(__name__)
 
 
@@ -86,11 +88,13 @@ class RefinerWithoutAdjacency(Refiner):
             inew_vertex = mesh.nvertices
 
         from meshmode.mesh.refinement.tessellate import (
-                get_group_tessellation_info,
-                get_group_midpoints,
-                get_group_tessellated_nodes)
+            get_group_midpoints,
+            get_group_tessellated_nodes,
+            get_group_tessellation_info,
+        )
 
-        for base_element_nr, grp in zip(mesh.base_element_nrs, mesh.groups):
+        for base_element_nr, grp in zip(mesh.base_element_nrs, mesh.groups,
+                                        strict=True):
             el_tess_info = get_group_tessellation_info(grp)
 
             # {{{ compute counts and index arrays
@@ -150,7 +154,8 @@ class RefinerWithoutAdjacency(Refiner):
 
                     for imidpoint, (iref_midpoint, (v1, v2)) in enumerate(zip(
                             el_tess_info.midpoint_indices,
-                            el_tess_info.midpoint_vertex_pairs)):
+                            el_tess_info.midpoint_vertex_pairs,
+                            strict=True)):
 
                         global_v1 = grp.vertex_indices[old_iel, v1]
                         global_v2 = grp.vertex_indices[old_iel, v2]
@@ -221,8 +226,8 @@ class RefinerWithoutAdjacency(Refiner):
         else:
             new_vertices = None
 
-        from meshmode.mesh import Mesh
-        new_mesh = Mesh(new_vertices, new_el_groups, is_conforming=(
+        from meshmode.mesh import make_mesh
+        new_mesh = make_mesh(new_vertices, new_el_groups, is_conforming=(
             mesh.is_conforming
             and (refine_flags.all() or (~refine_flags).all())))
 

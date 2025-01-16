@@ -25,24 +25,35 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-import sys
 import logging
 import numpy as np
-
+from typing import (
+    Union,
+    FrozenSet,
+    Tuple,
+    Any,
+    Optional,
+    Callable,
+    TYPE_CHECKING
+)
 from warnings import warn
-from typing import Union, FrozenSet, Tuple, Any
-from arraycontext import PyOpenCLArrayContext as PyOpenCLArrayContextBase
-from arraycontext import PytatoPyOpenCLArrayContext as PytatoPyOpenCLArrayContextBase
+
+from arraycontext import (
+    PyOpenCLArrayContext as PyOpenCLArrayContextBase,
+    PytatoPyOpenCLArrayContext as PytatoPyOpenCLArrayContextBase,
+)
 from arraycontext.pytest import (
-        _PytestPyOpenCLArrayContextFactoryWithClass,
-        _PytestPytatoPyOpenCLArrayContextFactory,
-        register_pytest_array_context_factory)
+    _PytestPyOpenCLArrayContextFactoryWithClass,
+    _PytestPytatoPyOpenCLArrayContextFactory,
+    register_pytest_array_context_factory,
+)
 from loopy.translation_unit import for_each_kernel
 
 from loopy.tools import memoize_on_disk
 from pytools import ProcessLogger, memoize_on_first_arg
 from pytools.tag import UniqueTag, tag_dataclass
 
+from meshmode import Error
 from meshmode.transform_metadata import (DiscretizationElementAxisTag,
                                          DiscretizationDOFAxisTag,
                                          DiscretizationFaceAxisTag,
@@ -53,8 +64,23 @@ from meshmode.transform_metadata import (DiscretizationElementAxisTag,
                                          DiscretizationEntityAxisTag)
 from dataclasses import dataclass
 
+if TYPE_CHECKING:
+    import pyopencl as cl
+
 from immutabledict import immutabledict
 logger = logging.getLogger(__name__)
+
+
+class ArrayContextLoopyTransformError(Error):
+    pass
+
+
+class AxisTagInferenceError(ArrayContextLoopyTransformError):
+    pass
+
+
+class EinsumInferenceError(ArrayContextLoopyTransformError):
+    pass
 
 
 def thaw(actx, ary):
@@ -70,10 +96,10 @@ def thaw(actx, ary):
 
 def _transform_loopy_inner(t_unit):
     import loopy as lp
-    from meshmode.transform_metadata import FirstAxisIsElementsTag
     from arraycontext.transform_metadata import ElementwiseMapKernelTag
-
     from pymbolic.primitives import Subscript, Variable
+
+    from meshmode.transform_metadata import FirstAxisIsElementsTag
 
     default_ep = t_unit.default_entrypoint
 
@@ -177,8 +203,10 @@ def _transform_loopy_inner(t_unit):
 
     # {{{ element/dof iname tag
 
-    from meshmode.transform_metadata import \
-            ConcurrentElementInameTag, ConcurrentDOFInameTag
+    from meshmode.transform_metadata import (
+        ConcurrentDOFInameTag,
+        ConcurrentElementInameTag,
+    )
     el_inames = [iname.name
             for iname in default_ep.inames.values()
             if ConcurrentElementInameTag() in iname.tags]
@@ -232,174 +260,6 @@ class PyOpenCLArrayContext(PyOpenCLArrayContextBase):
                     "have return_dict and no_numpy options set. "
                     "Did you use arraycontext.make_loopy_program "
                     "to create this kernel?")
-
-        '''
-        # Step 7.5 Dump kernels before feinsum is invoked
-        ### Start new code - Dump kernels before feinsum is invoked
-
-        # Pickle program and (index) arguments here 
-        # Hacky way, look for integer arrays
-
-        # After this is where the feinsum transformations come into play
-        # try to dump the kernels here.
-        ## Dumping in array-context adds the index arrays
-        print("===================HERE================")
-        #t_unit = pt_prg.program
-        print(t_unit)
-        import os
-        from os.path import exists
-        from hashlib import md5
-        import pickle
-
-        def unique_program_id(tunit, attempt_normalization=True):
-            from loopy.tools import LoopyKeyBuilder
-            kb = LoopyKeyBuilder()
-
-            assert len(tunit.entrypoints) == 1 # Only works for tunits with one entrypoint at present
-
-            # The program name is not relevant for transformation purposes.
-            # (Neither are the variable names, but I'm not going to touch that)
-            # Maybe feinsum has some capability for that?
-
-            # Kernel may not necessarily be an einsum, but for now assume it is
-            # (the tuner also doesn't care if there are einsums with different loop
-            # dimensions in the same kernel
-
-            key = kb(tunit.default_entrypoint.copy(name="loopy_kernel"))
-            if attempt_normalization:
-                import feinsum as f
-                try:
-                    # Not every einsum can currently be normalized, for instance
-                    # if it has a non-reduction RHS or if it has indirection
-                    canonical_einsum = f.normalize_einsum(f.match_einsum(tunit))
-                    normalized_key = kb(canonical_einsum)
-                    print("Successfully normalized einsum")
-                    #print(canonical_einsum)
-
-                    #from __init__ import get_einsum_counts
-                    #einsum_counts = list(get_einsum_counts(tunit).items())
-                    #einsum_type, count = einsum_counts[0]
-                    #if count == 4:
-                    #    exit()
-                except Exception:
-                    normalized_key = None
-                    #print("Failed to normalize tunit, using non-normalized program_id.")
-                    #key = kb(tunit.default_entrypoint.copy(name="loopy_kernel"))
-
-            return key, normalized_key
-
-
-        """
-        def unique_program_id(program):
-
-            ep = program.default_entrypoint
-            domains = ep.domains
-            instr = [str(entry) for entry in ep.instructions]
-            args = ep.args
-            name = ep.name
-
-            dstr = md5(str(domains).encode()).hexdigest()
-            istr = md5(str(instr).encode()).hexdigest()
-            astr = md5(str(args).encode()).hexdigest()
-            nstr = md5(name.encode()).hexdigest()
-            identifier = nstr[:4] + dstr[:4] + istr[:4] + astr[:4]
-
-            return identifier 
-        """
-
-        pid, norm_pid = unique_program_id(t_unit)
-
-        mpi_comm = getattr(self, "mpi_communicator", None)
-        rank = mpi_comm.Get_rank()
-
-        map_to_pid = None
-        """
-        if mpi_comm is not None:
-            max_dim = 0
-            for arg in t_unit.default_entrypoint.args:
-                for dim in arg.shape:
-                    max_dim = max(max_dim, dim)
-    
-            # What about when the kernel is small and n_out*n_elem <=1024?
-            data = np.array([max_dim, pid])
-            from mpi4py.MPI import Op, IN_PLACE
-            op = Op.Create(lambda a, b: np.max(a[0], b[0]), commute=True)
-            mpi_comm.Allreduce(IN_PLACE, data,op=op)
-            map_to_pid = data[1]
-        """
-
-        filename = "./pickled_programs"
-        file_path = f"{filename}/prefeinsum_{pid}_{rank}.pickle"
-        call_count_path = f"{filename}/call_count_{rank}.pickle"
-        from immutabledict import immutabledict
-
-        if not exists(file_path):
-            os.makedirs(os.path.dirname(filename), exist_ok=True)
-            out_file = open(file_path, "wb")
-            # Arguments may actually not be needed...
-            arguments = [] # The arguments aren't passed into
-            #for entry in bound_arguments.items():
-            #    if np.issubdtype(entry[1].dtype, np.integer):
-            #        arguments.append((entry[0], entry[1].get(),))
-
-            # In eager mode, the einsum tags aren't added, but the tuner still needs the tags
-            # so add them here.
-            out_dict = immutabledict({"tunit": t_unit,
-                                    "args": tuple(arguments), 
-                                    "map_to_pid": map_to_pid, 
-                                    "normalized_pid":norm_pid})
-            pickle.dump(out_dict, out_file)
-            #pickle.dump((t_unit, tuple(arguments),), out_file)
-            #pickle.dump(t_unit, out_file)
-
-            out_file.close()
-
-            #in_file = open(file_path, "rb")
-            #loaded = pickle.load(in_file)
-            #print("Loaded tunit")
-            #print(loaded["tunit"])
-
-
-        if not exists(call_count_path):
-            call_counts = {}
-        else:
-            call_count_file = open(call_count_path, "rb")
-            call_counts = dict(pickle.load(call_count_file))
-            call_count_file.close()
-
-        if pid in call_counts:
-            call_counts[pid] += 1
-        else:
-            call_counts[pid] = 1
-
-        call_count_file = open(call_count_path, "wb")
-        pickle.dump(immutabledict(call_counts), call_count_file)
-        call_count_file.close()
-
-        """
-        else:
-            in_file = open(file_path, "rb")
-            arguments = [] # The arguments aren't passed into
-            dic = pickle.load(in_file)
-            out_dict = immutabledict({"tunit": t_unit, 
-                                   "args": tuple(arguments), 
-                                   "map_to_pid": map_to_pid, 
-                                   "calls": dic["calls"] + 1,
-                                   "normalized_pid":norm_pid})
-            in_file.close()
-            out_file = open(file_path, "wb")
-            pickle.dump(out_dict, out_file)
-            #pickle.dump((t_unit, tuple(arguments),), out_file)
-            #pickle.dump(t_unit, out_file)
-
-            out_file.close()
-
-
-
-            ### End new code        
-        #exit()
-        """
-        '''
 
         transformed_t_unit = _transform_loopy_inner(t_unit)
 
@@ -458,13 +318,6 @@ class PytestPyOpenCLArrayContextFactory(
     actx_class = PyOpenCLArrayContext
 
 
-# deprecated
-class PytestPyOpenCLArrayContextFactoryWithHostScalars(
-        _PytestPyOpenCLArrayContextFactoryWithClass):
-    actx_class = PyOpenCLArrayContext
-    force_device_scalars = False
-
-
 class PytestPytatoPyOpenCLArrayContextFactory(
         _PytestPytatoPyOpenCLArrayContextFactory):
 
@@ -475,8 +328,6 @@ class PytestPytatoPyOpenCLArrayContextFactory(
 
 register_pytest_array_context_factory("meshmode.pyopencl",
         PytestPyOpenCLArrayContextFactory)
-register_pytest_array_context_factory("meshmode.pyopencl-deprecated",
-        PytestPyOpenCLArrayContextFactoryWithHostScalars)
 register_pytest_array_context_factory("meshmode.pytato_cl",
         PytestPytatoPyOpenCLArrayContextFactory)
 
@@ -510,27 +361,19 @@ _actx_names = (
         )
 
 
-if sys.version_info >= (3, 7):
-    def __getattr__(name):
-        if name not in _actx_names:
-            raise AttributeError(name)
+def __getattr__(name):
+    if name not in _actx_names:
+        raise AttributeError(name)
 
-        import arraycontext
-        result = getattr(arraycontext, name)
+    import arraycontext
+    result = getattr(arraycontext, name)
 
-        warn(f"meshmode.array_context.{name} is deprecated. "
-                f"Use arraycontext.{name} instead. "
-                f"meshmode.array_context.{name} will continue to work until 2022.",
-                DeprecationWarning, stacklevel=2)
+    warn(f"meshmode.array_context.{name} is deprecated. "
+         f"Use arraycontext.{name} instead. "
+         f"meshmode.array_context.{name} will continue to work until 2022.",
+         DeprecationWarning, stacklevel=2)
 
-        return result
-else:
-    def _import_names():
-        import arraycontext
-        for name in _actx_names:
-            globals()[name] = getattr(arraycontext, name)
-
-    _import_names()
+    return result
 
 # }}}
 
@@ -1225,9 +1068,6 @@ def _get_iel_to_idofs(kernel):
                    for dof_insn in kernel.iname_to_insns()[idof]):
                 pass
             else:
-                for dof_insn in kernel.iname_to_insns()[idof]:
-                    if iel not in kernel.id_to_insn[dof_insn].within_inames:
-                        print(f"_get_iel_to_idofs: {str(kernel.id_to_insn[dof_insn])=}")
                 raise NotImplementedError("The <iel,idof> loop "
                                           f"'{insn.within_inames}' has the idof-loop"
                                           " that's not nested within the iel-loop.")
@@ -1247,7 +1087,6 @@ def _get_iel_to_idofs(kernel):
                 raise NotImplementedError("Could not fit into  <iel,idof,iface>"
                                           " loop nest pattern.")
         else:
-            print(f"_get_iel_to_idofs: {str(insn)=}")
             raise NotImplementedError(f"Cannot fit loop nest '{insn.within_inames}'"
                                       " into known set of loop-nest patterns.")
 
@@ -1412,6 +1251,646 @@ def _combine_einsum_domains(knl):
     return knl.copy(domains=new_domains)
 
 
+from pytools.persistent_dict import WriteOncePersistentDict
+from pytato.analysis import PytatoKeyBuilder
+
+class FusionContractorArrayContext(
+        SingleGridWorkBalancingPytatoArrayContext):
+
+    def __init__(
+            self, queue: "cl.CommandQueue", allocator=None, *,
+            use_memory_pool: Optional[bool] = None,
+            compile_trace_callback: Optional[Callable[[Any, str, Any], None]] = None,
+            use_axis_tag_inference_fallback: bool = False,
+            use_einsum_inference_fallback: bool = False,
+
+            # do not use: only for testing
+            _force_svm_arg_limit: Optional[int] = None,
+            ) -> None:
+        super().__init__(
+            queue, allocator,
+            use_memory_pool=use_memory_pool,
+            compile_trace_callback=compile_trace_callback,
+            _force_svm_arg_limit=_force_svm_arg_limit)
+        self.use_axis_tag_inference_fallback = use_axis_tag_inference_fallback
+        self.use_einsum_inference_fallback = use_einsum_inference_fallback
+
+        self.transform_loopy_cache = WriteOncePersistentDict("meshmode-fusion_actx_transform_loopy_cache-v1",
+                key_builder=PytatoKeyBuilder(),
+                safe_sync=False)
+
+    def transform_dag(self, dag):
+        import pytato as pt
+
+        # {{{ Remove FEMEinsumTags that might have been propagated
+
+        # TODO: Is this too hacky?
+
+        def remove_fem_einsum_tags(expr):
+            if isinstance(expr, pt.Array):
+                try:
+                    fem_ensm_tag = next(iter(expr.tags_of_type(FEMEinsumTag)))
+                except StopIteration:
+                    return expr
+                else:
+                    # See https://github.com/inducer/arraycontext/pull/229
+                    # assert isinstance(expr, pt.InputArgumentBase)
+                    return expr.without_tags(fem_ensm_tag)
+            else:
+                return expr
+
+        dag = pt.transform.map_and_copy(dag, remove_fem_einsum_tags)
+
+        # }}}
+
+        # {{{ CSE
+
+        with ProcessLogger(logger, "transform_dag.mpms_materialization"):
+            dag = pt.transform.materialize_with_mpms(dag)
+
+        def mark_materialized_nodes_as_cse(
+                    ary: Union[pt.Array,
+                                pt.AbstractResultWithNamedArrays]) -> pt.Array:
+            if isinstance(ary, pt.AbstractResultWithNamedArrays):
+                return ary
+
+            if ary.tags_of_type(pt.tags.ImplStored):
+                return ary.tagged(pt.tags.PrefixNamed("cse"))
+            else:
+                return ary
+
+        with ProcessLogger(logger, "transform_dag.naming_cse"):
+            dag = pt.transform.map_and_copy(dag, mark_materialized_nodes_as_cse)
+
+        # }}}
+
+        # {{{ indirect addressing are non-negative
+
+        indirection_maps = set()
+
+        class _IndirectionMapRecorder(pt.transform.CachedWalkMapper):
+            # type-ignore-reason: dropped the extra `*args, **kwargs`.
+            def get_cache_key(self, expr) -> int:  # type: ignore[override]
+                return id(expr)
+
+            def post_visit(self, expr):
+                if isinstance(expr, pt.IndexBase):
+                    for idx in expr.indices:
+                        if isinstance(idx, pt.Array):
+                            indirection_maps.add(idx)
+
+        _IndirectionMapRecorder()(dag)
+
+        def tag_indices_as_non_negative(ary):
+            if ary in indirection_maps:
+                return ary.tagged(pt.tags.AssumeNonNegative())
+            else:
+                return ary
+
+        with ProcessLogger(logger, "transform_dag.tag_indices_as_non_negative"):
+            dag = pt.transform.map_and_copy(dag, tag_indices_as_non_negative)
+
+        # }}}
+
+        with ProcessLogger(logger, "transform_dag.deduplicate_data_wrappers"):
+            dag = pt.transform.deduplicate_data_wrappers(dag)
+
+        # {{{ get rid of copies for different views of a cl-array
+
+        def eliminate_reshapes_of_data_wrappers(ary):
+            if (isinstance(ary, pt.Reshape)
+                    and isinstance(ary.array, pt.DataWrapper)):
+                return pt.make_data_wrapper(ary.array.data.reshape(ary.shape),
+                                            tags=ary.tags,
+                                            axes=ary.axes)
+            else:
+                return ary
+
+        dag = pt.transform.map_and_copy(dag,
+                                        eliminate_reshapes_of_data_wrappers)
+
+        # }}}
+
+        # {{{ face_mass: materialize einsum args
+
+        def materialize_face_mass_input_and_output(expr):
+            if (isinstance(expr, pt.Einsum)
+                    and pt.analysis.is_einsum_similar_to_subscript(
+                            expr,
+                            "ifj,fej,fej->ei")):
+                mat, jac, vec = expr.args
+                return (pt.einsum("ifj,fej,fej->ei",
+                                  mat,
+                                  jac,
+                                  vec.tagged(pt.tags.ImplStored()))
+                        .tagged((pt.tags.ImplStored(),
+                                 pt.tags.PrefixNamed("face_mass"))))
+            else:
+                return expr
+
+        with ProcessLogger(logger,
+                           "transform_dag.materialize_face_mass_ins_and_outs"):
+            dag = pt.transform.map_and_copy(dag,
+                                            materialize_face_mass_input_and_output)
+
+        # }}}
+
+        # {{{ materialize inverse mass inputs
+
+        def materialize_inverse_mass_inputs(expr):
+            if (isinstance(expr, pt.Einsum)
+                    and pt.analysis.is_einsum_similar_to_subscript(
+                            expr,
+                            "ei,ij,ej->ei")):
+                arg1, arg2, arg3 = expr.args
+                if not arg3.tags_of_type(pt.tags.PrefixNamed):
+                    arg3 = arg3.tagged(pt.tags.PrefixNamed("mass_inv_inp"))
+                if not arg3.tags_of_type(pt.tags.ImplStored):
+                    arg3 = arg3.tagged(pt.tags.ImplStored())
+
+                return expr.copy(args=(arg1, arg2, arg3))
+            else:
+                return expr
+
+        dag = pt.transform.map_and_copy(dag, materialize_inverse_mass_inputs)
+
+        # }}}
+
+        # {{{ materialize all einsums
+
+        def materialize_all_einsums_or_reduces(expr):
+            from pytato.raising import (index_lambda_to_high_level_op,
+                                        ReduceOp)
+
+            if isinstance(expr, pt.Einsum):
+                return expr.tagged(pt.tags.ImplStored())
+            elif (isinstance(expr, pt.IndexLambda)
+                    and isinstance(index_lambda_to_high_level_op(expr), ReduceOp)):
+                return expr.tagged(pt.tags.ImplStored())
+            else:
+                return expr
+
+        with ProcessLogger(logger,
+                           "transform_dag.materialize_all_einsums_or_reduces"):
+            dag = pt.transform.map_and_copy(dag, materialize_all_einsums_or_reduces)
+
+        # }}}
+
+        # {{{ infer axis types
+
+        from meshmode.pytato_utils import unify_discretization_entity_tags
+
+        with ProcessLogger(logger, "transform_dag.infer_axes_tags"):
+            dag = unify_discretization_entity_tags(dag)
+
+        # }}}
+
+        # {{{ /!\ Remove tags from Loopy call results.
+        # See <https://www.github.com/inducer/pytato/issues/195>
+
+        def untag_loopy_call_results(expr):
+            from pytato.loopy import LoopyCallResult
+            if isinstance(expr, LoopyCallResult):
+                return expr.copy(tags=frozenset(),
+                                 axes=(pt.Axis(frozenset()),)*expr.ndim)
+            else:
+                return expr
+
+        dag = pt.transform.map_and_copy(dag, untag_loopy_call_results)
+
+        # }}}
+
+        # {{{ remove broadcasts from einsums: help feinsum
+
+        ensm_arg_rewrite_cache = {}
+
+        def _get_rid_of_broadcasts_from_einsum(expr):
+            # Helpful for matching against the available expressions
+            # in feinsum.
+
+            from pytato.utils import (are_shape_components_equal,
+                                      are_shapes_equal)
+            if isinstance(expr, pt.Einsum):
+                from pytato.array import EinsumElementwiseAxis
+                idx_to_len = expr._access_descr_to_axis_len()
+                new_access_descriptors = []
+                new_args = []
+                inp_gatherer = pt.transform.InputGatherer()
+                access_descr_to_axes = dict(expr.redn_axis_to_redn_descr)
+                for iax, axis in enumerate(expr.axes):
+                    access_descr_to_axes[EinsumElementwiseAxis(iax)] = axis
+
+                for access_descrs, arg in zip(expr.access_descriptors,
+                                              expr.args):
+                    new_shape = []
+                    new_access_descrs = []
+                    new_axes = []
+                    for iaxis, (access_descr, axis_len) in enumerate(
+                            zip(access_descrs,
+                                arg.shape)):
+                        if not are_shape_components_equal(axis_len,
+                                                          idx_to_len[access_descr]):
+                            assert are_shape_components_equal(axis_len, 1)
+                            if any(isinstance(inp, pt.Placeholder)
+                                   for inp in inp_gatherer(arg)):
+                                # do not get rid of broadcasts from parameteric
+                                # data.
+                                new_shape.append(axis_len)
+                                new_access_descrs.append(access_descr)
+                                new_axes.append(arg.axes[iaxis])
+                        else:
+                            new_axes.append(arg.axes[iaxis])
+                            new_shape.append(axis_len)
+                            new_access_descrs.append(access_descr)
+
+                    if not are_shapes_equal(new_shape, arg.shape):
+                        assert len(new_axes) == len(new_shape)
+                        arg_to_freeze = (arg.reshape(new_shape)
+                                         .copy(axes=tuple(
+                                             access_descr_to_axes[acc_descr]
+                                             for acc_descr in new_access_descrs)))
+
+                        try:
+                            new_arg = ensm_arg_rewrite_cache[arg_to_freeze]
+                        except KeyError:
+                            new_arg = self.thaw(self.freeze(arg_to_freeze))
+                            ensm_arg_rewrite_cache[arg_to_freeze] = new_arg
+
+                        arg = new_arg
+
+                    assert arg.ndim == len(new_access_descrs)
+                    new_args.append(arg)
+                    new_access_descriptors.append(tuple(new_access_descrs))
+
+                return expr.copy(
+                    access_descriptors=tuple(new_access_descriptors),
+                    args=tuple(new_args))
+            else:
+                return expr
+
+        dag = pt.transform.map_and_copy(dag, _get_rid_of_broadcasts_from_einsum)
+
+        # }}}
+
+        # {{{ remove any PartID tags
+
+        # FIXME: Remove after https://github.com/inducer/pytato/pull/393 goes in
+        try:
+            from pytato.distributed import PartIDTag
+
+            def remove_part_id_tags(expr):
+                if isinstance(expr, pt.Array) and expr.tags_of_type(PartIDTag):
+                    tag, = expr.tags_of_type(PartIDTag)
+                    return expr.without_tags(tag)
+                else:
+                    return expr
+        except ImportError:
+            remove_part_id_tags = None
+
+        if remove_part_id_tags is not None:
+            dag = pt.transform.map_and_copy(dag, remove_part_id_tags)
+
+        # }}}
+
+        # {{{ attach FEMEinsumTag tags
+
+        dag_outputs = frozenset(dag._data.values())
+
+        def add_fem_einsum_tags(expr):
+            if isinstance(expr, pt.Einsum):
+                from pytato.array import (EinsumElementwiseAxis,
+                                          EinsumReductionAxis)
+                assert expr.tags_of_type(pt.tags.ImplStored)
+                ensm_indices = []
+                for arg, access_descrs in zip(expr.args,
+                                              expr.access_descriptors):
+                    arg_indices = []
+                    for iaxis, access_descr in enumerate(access_descrs):
+                        try:
+                            discr_tag = next(
+                                iter(arg
+                                     .axes[iaxis]
+                                     .tags_of_type(DiscretizationEntityAxisTag)))
+                        except StopIteration:
+                            raise NotAnFEMEinsumError(expr)
+                        else:
+                            if isinstance(access_descr, EinsumElementwiseAxis):
+                                arg_indices.append(FreeEinsumIndex(discr_tag,
+                                                                   arg.shape[iaxis]))
+                            elif isinstance(access_descr, EinsumReductionAxis):
+                                arg_indices.append(SummationEinsumIndex(
+                                                          discr_tag,
+                                                          arg.shape[iaxis]))
+                            else:
+                                raise NotImplementedError(access_descr)
+                    ensm_indices.append(tuple(arg_indices))
+
+                return expr.tagged(FEMEinsumTag(tuple(ensm_indices)))
+            elif (isinstance(expr, pt.Array)
+                      and (expr.tags_of_type(pt.tags.ImplStored)
+                           or expr in dag_outputs)):
+                if (isinstance(expr, pt.IndexLambda)
+                        and expr.var_to_reduction_descr
+                        and expr.shape == ()):
+                    raise NotImplementedError("all-reduce expressions not"
+                                              " supported")
+                else:
+                    discr_tags = []
+                    for axis in expr.axes:
+                        try:
+                            discr_tag = next(
+                                iter(axis.tags_of_type(DiscretizationEntityAxisTag)))
+                        except StopIteration:
+                            raise NotAnFEMEinsumError(expr)
+                        else:
+                            discr_tags.append(discr_tag)
+
+                    fem_ensm_tag = FEMEinsumTag(
+                        (tuple(FreeEinsumIndex(discr_tag, dim)
+                               for dim, discr_tag in zip(expr.shape,
+                                                         discr_tags)),) * 2
+                    )
+
+                    return expr.tagged(fem_ensm_tag)
+
+            else:
+                return expr
+
+        try:
+            dag = pt.transform.map_and_copy(dag, add_fem_einsum_tags)
+        except NotAnFEMEinsumError:
+            pass
+
+        # }}}
+
+        # {{{ untag outputs tagged from being tagged ImplStored
+
+        def _untag_impl_stored(expr):
+            if isinstance(expr, pt.InputArgumentBase):
+                return expr
+            else:
+                return expr.without_tags(pt.tags.ImplStored(),
+                                         verify_existence=False)
+
+        dag = pt.make_dict_of_named_arrays({
+                name: _untag_impl_stored(named_ary.expr)
+                for name, named_ary in dag.items()})
+
+        # }}}
+
+        return dag
+
+    def transform_loopy_program(self, t_unit):
+        import loopy as lp
+        from functools import reduce
+        from arraycontext.impl.pytato.compile import FromArrayContextCompile
+
+        original_t_unit = t_unit
+        knl = t_unit.default_entrypoint
+
+        try:
+            r = self.transform_loopy_cache[t_unit]
+        except KeyError:
+            logger.info(f"FusionContractorArrayContext.transform_loopy_program '{knl.name}': cache miss")
+            pass
+        else:
+            logger.info(f"FusionContractorArrayContext.transform_loopy_program '{knl.name}': cache hit")
+            return r
+
+        # from loopy.transform.instruction import simplify_indices
+        # t_unit = simplify_indices(t_unit)
+
+
+        logger.info(f"Transforming kernel '{knl.name}' with {len(knl.instructions)} statements.")
+
+        # {{{ fallback: if the inames are not inferred which mesh entity they
+        # iterate over.
+
+        for iname in knl.all_inames():
+            if not knl.iname_tags_of_type(iname, DiscretizationEntityAxisTag):
+                if not self.use_axis_tag_inference_fallback:
+                    raise AxisTagInferenceError("Unable to infer axis tags.")
+                else:
+                    warn(f"[{knl.name}]: Falling back to a slower transformation"
+                         " strategy as some loops are uninferred which mesh entity"
+                         " they belong to.",
+                         stacklevel=2)
+                    return super().transform_loopy_program(original_t_unit)
+
+        for insn in knl.instructions:
+            for assignee in insn.assignee_var_names():
+                var = knl.get_var_descriptor(assignee)
+                if not var.tags_of_type(FEMEinsumTag):
+                    if not self.use_einsum_inference_fallback:
+                        raise EinsumInferenceError(
+                            "Unable to infer instructions as einsums.")
+                    else:
+                        warn(f"[{knl.name}]: Falling back to a slower transformation"
+                             " strategy as some instructions couldn't be inferred as"
+                             " einsums",
+                             stacklevel=2)
+                        return super().transform_loopy_program(original_t_unit)
+
+        # }}}
+
+        # {{{ hardcode offset to 0  (sorry humanity)
+
+        knl = knl.copy(args=[arg.copy(offset=0)
+                             for arg in knl.args])
+
+        # }}}
+
+        # {{{ loop fusion
+
+        with ProcessLogger(logger, "Loop Fusion"):
+            knl = fuse_same_discretization_entity_loops(knl)
+
+        # }}}
+
+        # {{{ align kernels for fused einsums
+
+        knl = _prepare_kernel_for_parallelization(knl)
+        knl = _combine_einsum_domains(knl)
+
+        # }}}
+
+        # {{{ array contraction
+
+        with ProcessLogger(logger, "Array Contraction"):
+            knl = contract_arrays(knl, t_unit.callables_table)
+
+        # }}}
+
+        # {{{ Stats Collection (Disabled)
+
+        if 0:
+            with ProcessLogger(logger, "Counting Kernel Ops"):
+                from loopy.kernel.array import ArrayBase
+                from pytools import product
+                knl = knl.copy(
+                    silenced_warnings=(knl.silenced_warnings
+                                        + ["insn_count_subgroups_upper_bound",
+                                            "summing_if_branches_ops"]))
+
+                t_unit = t_unit.with_kernel(knl)
+
+                op_map = lp.get_op_map(t_unit, subgroup_size=32)
+
+                c64_ops = {op_type: (op_map.filter_by(dtype=[np.complex64],
+                                                      name=op_type,
+                                                      kernel_name=knl.name)
+                                      .eval_and_sum({}))
+                            for op_type in ["add", "mul", "div"]}
+                c128_ops = {op_type: (op_map.filter_by(dtype=[np.complex128],
+                                                       name=op_type,
+                                                       kernel_name=knl.name)
+                                      .eval_and_sum({}))
+                            for op_type in ["add", "mul", "div"]}
+                f32_ops = ((op_map.filter_by(dtype=[np.float32],
+                                             kernel_name=knl.name)
+                            .eval_and_sum({}))
+                           + (2 * c64_ops["add"]
+                              + 6 * c64_ops["mul"]
+                              + (6 + 3 + 2) * c64_ops["div"]))
+                f64_ops = ((op_map.filter_by(dtype=[np.float64],
+                                             kernel_name="_pt_kernel")
+                            .eval_and_sum({}))
+                           + (2 * c128_ops["add"]
+                              + 6 * c128_ops["mul"]
+                              + (6 + 3 + 2) * c128_ops["div"]))
+
+                # {{{ footprint gathering
+
+                nfootprint_bytes = 0
+
+                for ary in knl.args:
+                    if (isinstance(ary, ArrayBase)
+                            and ary.address_space == lp.AddressSpace.GLOBAL):
+                        nfootprint_bytes += (product(ary.shape)
+                                            * ary.dtype.itemsize)
+
+                for ary in knl.temporary_variables.values():
+                    if ary.address_space == lp.AddressSpace.GLOBAL:
+                        # global temps would be written once and read once
+                        nfootprint_bytes += (2 * product(ary.shape)
+                                            * ary.dtype.itemsize)
+
+                # }}}
+
+                if f32_ops:
+                    logger.info(f"Single-prec. GFlOps: {f32_ops * 1e-9}")
+                if f64_ops:
+                    logger.info(f"Double-prec. GFlOps: {f64_ops * 1e-9}")
+                logger.info(f"Footprint GBs: {nfootprint_bytes * 1e-9}")
+
+        # }}}
+
+        # {{{ check whether we can parallelize the kernel
+
+        try:
+            iel_to_idofs = _get_iel_to_idofs(knl)
+        except NotImplementedError as err:
+            if knl.tags_of_type(FromArrayContextCompile):
+                raise err
+            else:
+                warn(f"[{knl.name}]: FusionContractorArrayContext."
+                     "transform_loopy_program not broad enough (yet)."
+                     " Falling back to a possibly slower"
+                     " transformation strategy.")
+                return super().transform_loopy_program(original_t_unit)
+
+        # }}}
+
+        # {{{ insert barriers between consecutive iel-loops
+
+        toposorted_iels = _get_element_loop_topo_sorted_order(knl)
+
+        for iel_pred, iel_succ in zip(toposorted_iels[:-1],
+                                      toposorted_iels[1:]):
+            knl = lp.add_barrier(knl,
+                                 insn_before=f"iname:{iel_pred}",
+                                 insn_after=f"iname:{iel_succ}")
+
+        # }}}
+
+        t_unit = _alias_global_temporaries(t_unit)
+
+        # {{{ Parallelization strategy: Use feinsum
+
+        t_unit = t_unit.with_kernel(knl)
+        del knl
+
+        if False and t_unit.default_entrypoint.tags_of_type(FromArrayContextCompile):
+            # FIXME: Enable this branch, WIP for now and hence disabled it.
+            from loopy.match import ObjTagged
+            import feinsum as fnsm
+            from meshmode.feinsum_transformations import FEINSUM_TO_TRANSFORMS
+
+            assert all(insn.tags_of_type(EinsumTag)
+                       for insn in t_unit.default_entrypoint.instructions
+                       if isinstance(insn, lp.MultiAssignmentBase)
+                       )
+
+            einsum_tags = reduce(
+                frozenset.union,
+                (insn.tags_of_type(EinsumTag)
+                 for insn in t_unit.default_entrypoint.instructions),
+                frozenset())
+            for ensm_tag in sorted(einsum_tags,
+                                   key=lambda x: sorted(x.orig_loop_nest)):
+                if reduce(frozenset.union,
+                          (insn.reduction_inames()
+                           for insn in (t_unit.default_entrypoint.instructions)
+                           if ensm_tag in insn.tags),
+                          frozenset()):
+                    fused_einsum = fnsm.match_einsum(t_unit, ObjTagged(ensm_tag))
+                else:
+                    # elementwise loop
+                    fused_einsum = _get_elementwise_einsum(t_unit, ensm_tag)
+
+                try:
+                    fnsm_transform = FEINSUM_TO_TRANSFORMS[
+                        fnsm.normalize_einsum(fused_einsum)]
+                except KeyError:
+                    fnsm.query(fused_einsum,
+                               self.queue.context,
+                               err_if_no_results=True)
+                    1/0
+
+                t_unit = fnsm_transform(t_unit,
+                                        insn_match=ObjTagged(ensm_tag))
+        else:
+            knl = t_unit.default_entrypoint
+            for iel, idofs in sorted(iel_to_idofs.items()):
+                if idofs:
+                    nunit_dofs = {knl.get_constant_iname_length(idof)
+                                  for idof in idofs}
+                    idof, = idofs
+
+                    l_one_size, l_zero_size = _get_group_size_for_dof_array_loop(
+                        nunit_dofs)
+
+                    knl = lp.split_iname(knl, iel, l_one_size,
+                                         inner_tag="l.1", outer_tag="g.0")
+                    knl = lp.split_iname(knl, idof, l_zero_size,
+                                         inner_tag="l.0", outer_tag="unr")
+                else:
+                    knl = lp.split_iname(knl, iel, 32,
+                                         outer_tag="g.0", inner_tag="l.0")
+
+            t_unit = t_unit.with_kernel(knl)
+
+        # }}}
+
+        self.transform_loopy_cache.store_if_not_present(original_t_unit, t_unit)
+
+        return t_unit
+
+
+# vim: foldmethod=marker
+
+# Kernel Dumping stuff
+
 class FusionContractorArrayContextBase(SingleGridWorkBalancingPytatoArrayContext):
 
     def transform_dag(self, dag):
@@ -1546,7 +2025,7 @@ class FusionContractorArrayContextBase(SingleGridWorkBalancingPytatoArrayContext
                 return pt.Einsum(expr.access_descriptors,
                                  (arg1, arg2, arg3),
                                  expr.redn_axis_to_redn_descr,
-                                 expr.index_to_access_descr,
+                                 #expr.index_to_access_descr,
                                  axes=expr.axes,
                                  tags=expr.tags)
             else:
@@ -1842,7 +2321,7 @@ class FusionContractorArrayContextBase(SingleGridWorkBalancingPytatoArrayContext
 
         knl = _prepare_kernel_for_parallelization(knl)
         knl = _combine_einsum_domains(knl)
-    
+
         # }}}
 
         # {{{ array contraction
@@ -1932,7 +2411,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
         from arraycontext.impl.pytato.compile import FromArrayContextCompile
 
         from feintune.utils import unique_program_id
-        
+
         pid = unique_program_id(t_unit, attempt_normalization=False)
         norm_pid = unique_program_id(t_unit, attempt_normalization=True)
 
@@ -1978,7 +2457,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
         def dump_tunit(t_unit):
             ### Start new code - Dump kernels before feinsum is invoked
 
-            # Pickle program and (index) arguments here 
+            # Pickle program and (index) arguments here
             # Hacky way, look for integer arrays
 
             # After this is where the feinsum transformations come into play
@@ -1999,7 +2478,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
                 for arg in t_unit.default_entrypoint.args:
                     for dim in arg.shape:
                         max_dim = max(max_dim, dim)
-        
+
                 # What about when the kernel is small and n_out*n_elem <=1024?
                 data = np.array([max_dim, pid])
                 from mpi4py.MPI import Op, IN_PLACE
@@ -2049,7 +2528,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
                 #if smallest_rank == rank:
 
                 out_file = open(file_path, "wb")
-                
+
 
                 # Arguments may actually not be needed...
                 arguments = [] # The arguments aren't passed into
@@ -2057,8 +2536,8 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
                 #    if np.issubdtype(entry[1].dtype, np.integer):
                 #        arguments.append((entry[0], entry[1].get(),))
                 out_dict = immutabledict({"tunit": t_unit,
-                                        "args": tuple(arguments), 
-                                        "map_to_pid": map_to_pid, 
+                                        "args": tuple(arguments),
+                                        "map_to_pid": map_to_pid,
                                         "normalized_pid": norm_pid})
                 pickle.dump(out_dict, out_file)
                 #pickle.dump((t_unit, tuple(arguments),), out_file)
@@ -2098,7 +2577,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
             t_unit = t_unit.with_kernel(knl)
             dump_tunit(t_unit)
             del knl
-        
+
         except NotImplementedError as err:
             if knl.tags_of_type(FromArrayContextCompile):
                 raise err
@@ -2138,9 +2617,9 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
             in_file = open(file_path, "rb")
             arguments = [] # The arguments aren't passed into
             dic = pickle.load(in_file)
-            out_dict = immutabledict({"tunit": t_unit, 
-                                   "args": tuple(arguments), 
-                                   "map_to_pid": map_to_pid, 
+            out_dict = immutabledict({"tunit": t_unit,
+                                   "args": tuple(arguments),
+                                   "map_to_pid": map_to_pid,
                                    "calls": dic["calls"] + 1,
                                    "normalized_pid": norm_pid})
             in_file.close()
@@ -2153,7 +2632,7 @@ class KernelDumpingFusionContractorArrayContextBase(FusionContractorArrayContext
 
 
 
-            ### End new code        
+            ### End new code
         #exit()
         """
 
@@ -2201,7 +2680,7 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         import os
         dirname = "./pickled_programs"
         os.makedirs(os.path.dirname(dirname), exist_ok=True)
- 
+
         # Dump out the macro-kernel of this process
         # (Currently using the disk to communicate the pickled
         # macrokernels)
@@ -2210,7 +2689,7 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
         my_pid = unique_program_id(t_unit)
         logger.info(f"MY PID: {my_pid}")
         t_unit = super().transform_loopy_program(t_unit)
-        logger.info("Finished call to super") 
+        logger.info("Finished call to super")
 
         # Generate the PID of this processes' macrokernel and share with all processes
         mpi_comm = getattr(self, "mpi_communicator", None)
@@ -2260,7 +2739,7 @@ class AutotuningFusionContractorArrayContext(KernelDumpingFusionContractorArrayC
 
         return return_tunit
 
-       
+
 class KernelDumpingFusionContractorArrayContext(KernelDumpingFusionContractorArrayContextBase):
 
     def transform_loopy_program(self, t_unit):
@@ -2411,7 +2890,7 @@ class KernelDumpingFusionContractorArrayContext(KernelDumpingFusionContractorArr
 
         return t_unit
 
-
+"""
 class FusionContractorArrayContext(FusionContractorArrayContextBase):
 
     def transform_loopy_program(self, t_unit):
@@ -2560,12 +3039,13 @@ class FusionContractorArrayContext(FusionContractorArrayContextBase):
         # }}}
 
         return t_unit
+"""
 
 # This doesn't seem like it should work. Since _get_iel_to_idofs should
 # have already been called.
 class PrefusedFusionContractorArrayContext(FusionContractorArrayContextBase):
 
-    # Does not call super() as it assumes the input is a fused t_unit. 
+    # Does not call super() as it assumes the input is a fused t_unit.
     def transform_loopy_program(self, t_unit):
         import loopy as lp
         from functools import reduce
@@ -2811,7 +3291,7 @@ class KernelDumpingFusionContractorArrayContextOld(
                 return pt.Einsum(expr.access_descriptors,
                                  (arg1, arg2, arg3),
                                  expr.redn_axis_to_redn_descr,
-                                 expr.index_to_access_descr,
+                                 #expr.index_to_access_descr,
                                  axes=expr.axes,
                                  tags=expr.tags)
             else:
@@ -2932,8 +3412,8 @@ class KernelDumpingFusionContractorArrayContextOld(
                                  tags=expr.tags,
                                  axes=expr.axes,
                                  redn_axis_to_redn_descr=(expr
-                                                          .redn_axis_to_redn_descr),
-                                 index_to_access_descr=expr.index_to_access_descr)
+                                                          .redn_axis_to_redn_descr))#,
+                                 #index_to_access_descr=expr.index_to_access_descr)
             else:
                 return expr
 
@@ -3055,7 +3535,7 @@ class KernelDumpingFusionContractorArrayContextOld(
         from arraycontext.impl.pytato.compile import FromArrayContextCompile
 
         from feintune.utils import unique_program_id
-        
+
         pid = unique_program_id(t_unit, attempt_normalization=False)
         norm_pid = unique_program_id(t_unit, attempt_normalization=True)
 
@@ -3114,7 +3594,7 @@ class KernelDumpingFusionContractorArrayContextOld(
 
         knl = _prepare_kernel_for_parallelization(knl)
         knl = _combine_einsum_domains(knl)
-    
+
         # }}}
 
         # {{{ array contraction
@@ -3191,7 +3671,7 @@ class KernelDumpingFusionContractorArrayContextOld(
         def dump_tunit(t_unit):
             ### Start new code - Dump kernels before feinsum is invoked
 
-            # Pickle program and (index) arguments here 
+            # Pickle program and (index) arguments here
             # Hacky way, look for integer arrays
 
             # After this is where the feinsum transformations come into play
@@ -3212,7 +3692,7 @@ class KernelDumpingFusionContractorArrayContextOld(
                 for arg in t_unit.default_entrypoint.args:
                     for dim in arg.shape:
                         max_dim = max(max_dim, dim)
-        
+
                 # What about when the kernel is small and n_out*n_elem <=1024?
                 data = np.array([max_dim, pid])
                 from mpi4py.MPI import Op, IN_PLACE
@@ -3262,7 +3742,7 @@ class KernelDumpingFusionContractorArrayContextOld(
                 #if smallest_rank == rank:
 
                 out_file = open(file_path, "wb")
-                
+
 
                 # Arguments may actually not be needed...
                 arguments = [] # The arguments aren't passed into
@@ -3270,8 +3750,8 @@ class KernelDumpingFusionContractorArrayContextOld(
                 #    if np.issubdtype(entry[1].dtype, np.integer):
                 #        arguments.append((entry[0], entry[1].get(),))
                 out_dict = immutabledict({"tunit": t_unit,
-                                        "args": tuple(arguments), 
-                                        "map_to_pid": map_to_pid, 
+                                        "args": tuple(arguments),
+                                        "map_to_pid": map_to_pid,
                                         "normalized_pid": norm_pid})
                 pickle.dump(out_dict, out_file)
                 #pickle.dump((t_unit, tuple(arguments),), out_file)
@@ -3308,7 +3788,7 @@ class KernelDumpingFusionContractorArrayContextOld(
                                  insn_before=f"iname:{iel_pred}",
                                  insn_after=f"iname:{iel_succ}")
 
-        # }}} 
+        # }}}
 
         #print(knl)
         t_unit = _alias_global_temporaries(t_unit)
@@ -3326,7 +3806,7 @@ class KernelDumpingFusionContractorArrayContextOld(
         # Step 7.5 Dump kernels before feinsum is invoked
         ### Start new code - Dump kernels before feinsum is invoked
 
-        # Pickle program and (index) arguments here 
+        # Pickle program and (index) arguments here
         # Hacky way, look for integer arrays
 
         # After this is where the feinsum transformations come into play
@@ -3394,7 +3874,7 @@ class KernelDumpingFusionContractorArrayContextOld(
             nstr = md5(name.encode()).hexdigest()
             identifier = nstr[:4] + dstr[:4] + istr[:4] + astr[:4]
 
-            return identifier 
+            return identifier
         """
 
         pid, norm_pid = unique_program_id(t_unit)
@@ -3409,7 +3889,7 @@ class KernelDumpingFusionContractorArrayContextOld(
             for arg in t_unit.default_entrypoint.args:
                 for dim in arg.shape:
                     max_dim = max(max_dim, dim)
-    
+
             # What about when the kernel is small and n_out*n_elem <=1024?
             data = np.array([max_dim, pid])
             from mpi4py.MPI import Op, IN_PLACE
@@ -3438,8 +3918,8 @@ class KernelDumpingFusionContractorArrayContextOld(
             #    if np.issubdtype(entry[1].dtype, np.integer):
             #        arguments.append((entry[0], entry[1].get(),))
             out_dict = immutabledict({"tunit": t_unit,
-                                    "args": tuple(arguments), 
-                                    "map_to_pid": map_to_pid, 
+                                    "args": tuple(arguments),
+                                    "map_to_pid": map_to_pid,
                                     "normalized_pid":norm_pid})
             pickle.dump(out_dict, out_file)
             #pickle.dump((t_unit, tuple(arguments),), out_file)
@@ -3474,9 +3954,9 @@ class KernelDumpingFusionContractorArrayContextOld(
             in_file = open(file_path, "rb")
             arguments = [] # The arguments aren't passed into
             dic = pickle.load(in_file)
-            out_dict = immutabledict({"tunit": t_unit, 
-                                   "args": tuple(arguments), 
-                                   "map_to_pid": map_to_pid, 
+            out_dict = immutabledict({"tunit": t_unit,
+                                   "args": tuple(arguments),
+                                   "map_to_pid": map_to_pid,
                                    "calls": dic["calls"] + 1,
                                    "normalized_pid":norm_pid})
             in_file.close()
@@ -3489,7 +3969,7 @@ class KernelDumpingFusionContractorArrayContextOld(
 
 
 
-            ### End new code        
+            ### End new code
         #exit()
         """
         '''
@@ -3555,11 +4035,9 @@ class KernelDumpingFusionContractorArrayContextOld(
 
             t_unit = t_unit.with_kernel(knl)
 
-        # }}} 
+        # }}}
 
         return t_unit
-
-
 
 
 class FusionContractorArrayContextOld(
@@ -3992,7 +4470,7 @@ class FusionContractorArrayContextOld(
 
         knl = _prepare_kernel_for_parallelization(knl)
         knl = _combine_einsum_domains(knl)
-    
+
         # }}}
 
         # {{{ array contraction
@@ -4107,7 +4585,7 @@ class FusionContractorArrayContextOld(
         # Step 7.5 Dump kernels before feinsum is invoked
         ### Start new code - Dump kernels before feinsum is invoked
 
-        # Pickle program and (index) arguments here 
+        # Pickle program and (index) arguments here
         # Hacky way, look for integer arrays
 
         # After this is where the feinsum transformations come into play
@@ -4175,7 +4653,7 @@ class FusionContractorArrayContextOld(
             nstr = md5(name.encode()).hexdigest()
             identifier = nstr[:4] + dstr[:4] + istr[:4] + astr[:4]
 
-            return identifier 
+            return identifier
         """
 
         pid, norm_pid = unique_program_id(t_unit)
@@ -4190,7 +4668,7 @@ class FusionContractorArrayContextOld(
             for arg in t_unit.default_entrypoint.args:
                 for dim in arg.shape:
                     max_dim = max(max_dim, dim)
-    
+
             # What about when the kernel is small and n_out*n_elem <=1024?
             data = np.array([max_dim, pid])
             from mpi4py.MPI import Op, IN_PLACE
@@ -4219,8 +4697,8 @@ class FusionContractorArrayContextOld(
             #    if np.issubdtype(entry[1].dtype, np.integer):
             #        arguments.append((entry[0], entry[1].get(),))
             out_dict = immutabledict({"tunit": t_unit,
-                                    "args": tuple(arguments), 
-                                    "map_to_pid": map_to_pid, 
+                                    "args": tuple(arguments),
+                                    "map_to_pid": map_to_pid,
                                     "normalized_pid":norm_pid})
             pickle.dump(out_dict, out_file)
             #pickle.dump((t_unit, tuple(arguments),), out_file)
@@ -4255,9 +4733,9 @@ class FusionContractorArrayContextOld(
             in_file = open(file_path, "rb")
             arguments = [] # The arguments aren't passed into
             dic = pickle.load(in_file)
-            out_dict = immutabledict({"tunit": t_unit, 
-                                   "args": tuple(arguments), 
-                                   "map_to_pid": map_to_pid, 
+            out_dict = immutabledict({"tunit": t_unit,
+                                   "args": tuple(arguments),
+                                   "map_to_pid": map_to_pid,
                                    "calls": dic["calls"] + 1,
                                    "normalized_pid":norm_pid})
             in_file.close()
@@ -4270,7 +4748,7 @@ class FusionContractorArrayContextOld(
 
 
 
-            ### End new code        
+            ### End new code
         #exit()
         """
         '''
@@ -4402,7 +4880,7 @@ class PrefusedFusionContractorArrayContextOld(FusionContractorArrayContextBase):
 
         knl = _prepare_kernel_for_parallelization(knl)
         knl = _combine_einsum_domains(knl)
-    
+
         # }}}
 
         # {{{ array contraction
@@ -4516,7 +4994,7 @@ class PrefusedFusionContractorArrayContextOld(FusionContractorArrayContextBase):
         # Step 7.5 Dump kernels before feinsum is invoked
         ### Start new code - Dump kernels before feinsum is invoked
 
-        # Pickle program and (index) arguments here 
+        # Pickle program and (index) arguments here
         # Hacky way, look for integer arrays
 
         # After this is where the feinsum transformations come into play
@@ -4584,7 +5062,7 @@ class PrefusedFusionContractorArrayContextOld(FusionContractorArrayContextBase):
             nstr = md5(name.encode()).hexdigest()
             identifier = nstr[:4] + dstr[:4] + istr[:4] + astr[:4]
 
-            return identifier 
+            return identifier
         """
 
         pid, norm_pid = unique_program_id(t_unit)
@@ -4599,7 +5077,7 @@ class PrefusedFusionContractorArrayContextOld(FusionContractorArrayContextBase):
             for arg in t_unit.default_entrypoint.args:
                 for dim in arg.shape:
                     max_dim = max(max_dim, dim)
-    
+
             # What about when the kernel is small and n_out*n_elem <=1024?
             data = np.array([max_dim, pid])
             from mpi4py.MPI import Op, IN_PLACE
@@ -4628,8 +5106,8 @@ class PrefusedFusionContractorArrayContextOld(FusionContractorArrayContextBase):
             #    if np.issubdtype(entry[1].dtype, np.integer):
             #        arguments.append((entry[0], entry[1].get(),))
             out_dict = immutabledict({"tunit": t_unit,
-                                    "args": tuple(arguments), 
-                                    "map_to_pid": map_to_pid, 
+                                    "args": tuple(arguments),
+                                    "map_to_pid": map_to_pid,
                                     "normalized_pid":norm_pid})
             pickle.dump(out_dict, out_file)
             #pickle.dump((t_unit, tuple(arguments),), out_file)
@@ -4664,9 +5142,9 @@ class PrefusedFusionContractorArrayContextOld(FusionContractorArrayContextBase):
             in_file = open(file_path, "rb")
             arguments = [] # The arguments aren't passed into
             dic = pickle.load(in_file)
-            out_dict = immutabledict({"tunit": t_unit, 
-                                   "args": tuple(arguments), 
-                                   "map_to_pid": map_to_pid, 
+            out_dict = immutabledict({"tunit": t_unit,
+                                   "args": tuple(arguments),
+                                   "map_to_pid": map_to_pid,
                                    "calls": dic["calls"] + 1,
                                    "normalized_pid":norm_pid})
             in_file.close()
@@ -4679,7 +5157,7 @@ class PrefusedFusionContractorArrayContextOld(FusionContractorArrayContextBase):
 
 
 
-            ### End new code        
+            ### End new code
         #exit()
         """
         '''
@@ -4752,3 +5230,4 @@ class PrefusedFusionContractorArrayContextOld(FusionContractorArrayContextBase):
 
 
 # vim: foldmethod=marker
+

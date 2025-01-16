@@ -3,15 +3,16 @@
 
 import numpy as np
 import numpy.linalg as la
-import pyopencl as cl
-from meshmode.array_context import PyOpenCLArrayContext
-import meshmode.mesh.generation as mgen
-import meshmode.discretization.poly_element as poly
-import meshmode.discretization.connection as conn
-from meshmode.discretization import Discretization
-from meshmode.mesh import Mesh, BTAG_ALL
 
 import modepy
+import pyopencl as cl
+
+import meshmode.discretization.connection as conn
+import meshmode.discretization.poly_element as poly
+import meshmode.mesh.generation as mgen
+from meshmode.array_context import PyOpenCLArrayContext
+from meshmode.discretization import Discretization
+from meshmode.mesh import BTAG_ALL, make_mesh
 
 
 def main():
@@ -78,7 +79,7 @@ def main():
     from meshmode.mesh.generation import make_group_from_vertices
     mod_grp = make_group_from_vertices(vertices, grp.vertex_indices, order=grp.order)
 
-    mod_mesh = Mesh(
+    mod_mesh = make_mesh(
             vertices=vertices, groups=[mod_grp],
             is_conforming=bdry_mesh.is_conforming)
 

@@ -25,13 +25,13 @@ Features:
 - Independent of execution environment (GPU/CPU, numpy, ...)
   via `array contexts <https://github.com/inducer/arraycontext/>`__.
 - Simple mesh refinement (via bisection). Adjacency currently only
-  maintained if uniform.
+  maintained if conforming.
 - Input from Gmsh, Visualization to Vtk (both high-order curvilinear).
 - Easy data exchange with `Firedrake <https://www.firedrakeproject.org/>`__.
 
 Meshmode emerged as the shared discretization layer for `pytential
 <https://github.com/inducer/pytential/>`__ (layer potentials) and `grudge
-<https://github.com/inducer/grudge>`__ (discontinous Galerkin).
+<https://github.com/inducer/grudge>`__ (discontinuous Galerkin).
 
 Places on the web related to meshmode:
 

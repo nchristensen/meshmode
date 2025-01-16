@@ -1,7 +1,9 @@
 import logging
+
 import numpy as np
 
 from meshmode.mesh import Mesh
+
 
 logger = logging.getLogger(__file__)
 
@@ -33,8 +35,8 @@ def main(*, ambient_dim: int) -> None:
     from mpi4py import MPI
     comm = MPI.COMM_WORLD
 
-    from meshmode.mesh.processing import partition_mesh
     from meshmode.distributed import membership_list_to_map
+    from meshmode.mesh.processing import partition_mesh
 
     order = 5
     nelements = 64 if ambient_dim == 3 else 256
@@ -54,8 +56,7 @@ def main(*, ambient_dim: int) -> None:
         parts = [part_id_to_part[i] for i in range(comm.size)]
         local_mesh = comm.scatter(parts)
     else:
-        # Reason for type-ignore: presumed faulty type annotation in mpi4py
-        local_mesh = comm.scatter(None)  # type: ignore[arg-type]
+        local_mesh = comm.scatter(None)
 
     logger.info("[%4d] distributing mesh: finished", comm.rank)
 
@@ -68,7 +69,7 @@ def main(*, ambient_dim: int) -> None:
 
     vector_field = actx.thaw(discr.nodes())
     scalar_field = actx.np.sin(vector_field[0])
-    part_id = 1.0 + comm.rank + discr.zeros(actx)     # type: ignore[operator]
+    part_id = 1.0 + comm.rank + discr.zeros(actx)
     logger.info("[%4d] fields: finished", comm.rank)
 
     from meshmode.discretization.visualization import make_visualizer
